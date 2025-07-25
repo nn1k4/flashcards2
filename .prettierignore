@@ -1,0 +1,21 @@
+# Игнорировать Python файлы (используем ruff)
+*.py
+
+# Виртуальное окружение и кэши
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Для Flask-проектов
+instance/
+migrations/
+
+# Для React/Next.js
+node_modules/
+.next/
+build/
+dist/
+
+# НОВОЕ: Игнорировать папку diff
+diff/
