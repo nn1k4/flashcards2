@@ -1,13 +1,22 @@
 // Централизованная система анализа и классификации ошибок API
-export enum ErrorType {
-  PROXY_UNAVAILABLE = "proxy_unavailable", // прокси недоступен
-  NETWORK_ERROR = "network_error", // проблемы с интернетом
-  API_OVERLOADED = "api_overloaded", // API перегружен (529)
-  RATE_LIMITED = "rate_limited", // превышен лимит (429)
-  AUTHENTICATION = "authentication", // проблемы с API ключом (401, 403)
-  INSUFFICIENT_QUOTA = "insufficient_quota", // недостаточно средств (402)
-  UNKNOWN = "unknown", // прочие ошибки
-}
+export const ErrorType = {
+  PROXY_UNAVAILABLE: "proxy_unavailable", // прокси недоступен
+  NETWORK_ERROR: "network_error", // проблемы с интернетом
+  API_OVERLOADED: "api_overloaded", // API перегружен (529)
+  RATE_LIMITED: "rate_limited", // превышен лимит (429)
+  AUTHENTICATION: "authentication", // проблемы с API ключом (401, 403)
+  INSUFFICIENT_QUOTA: "insufficient_quota", // недостаточно средств (402)
+  UNKNOWN: "unknown", // прочие ошибки
+} as const;
+
+export type ErrorType =
+  | "proxy_unavailable"
+  | "network_error"
+  | "api_overloaded"
+  | "rate_limited"
+  | "authentication"
+  | "insufficient_quota"
+  | "unknown";
 
 export interface ErrorInfo {
   type: ErrorType;
