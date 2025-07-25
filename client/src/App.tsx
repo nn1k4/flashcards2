@@ -281,6 +281,9 @@ function App() {
   // Основные состояния приложения
   const [mode, setMode] = React.useState<AppMode>("text");
   const [inputText, setInputText] = React.useState("");
+  // Локальные состояния навигации по карточкам
+  const [currentIndex, setCurrentIndex] = React.useState(0);
+  const [flipped, setFlipped] = React.useState(false);
 
   // ОБНОВЛЕННАЯ интеграция с useProcessing - добавляем retry функциональность
   const {
@@ -304,8 +307,34 @@ function App() {
     retryQueue,
   } = useProcessing(inputText, setMode);
 
-  // Интеграция клавиатурной навигации (существующая архитектура)
-  useKeyboardNavigation(mode, setMode, flashcards, updateCard);
+  // Колбэки для навигации по карточкам
+  const handleIndexChange = React.useCallback((idx: number) => {
+    setCurrentIndex(idx);
+  }, []);
+
+  const handleFlip = React.useCallback((value: boolean) => {
+    setFlipped(value);
+  }, []);
+
+  const handleHideCard = React.useCallback(() => {
+    const visible = flashcards.filter(card => card.visible !== false);
+    const card = visible[Math.min(currentIndex, visible.length - 1)];
+    if (card) {
+      toggleCardVisibility(card.id);
+    }
+  }, [flashcards, currentIndex, toggleCardVisibility]);
+
+  // Интеграция клавиатурной навигации
+  useKeyboardNavigation({
+    mode,
+    state,
+    flashcards,
+    currentIndex,
+    flipped,
+    onIndexChange: handleIndexChange,
+    onFlip: handleFlip,
+    onHideCard: handleHideCard,
+  });
 
   // Интеграция файловых операций (существующая архитектура)
   const { exportData, importData } = useFileOperations({
@@ -407,7 +436,14 @@ function App() {
       )}
 
       {mode === "flashcards" && (
-        <FlashcardsView flashcards={flashcards.filter(card => card.visible)} />
+        <FlashcardsView
+          flashcards={flashcards.filter(card => card.visible)}
+          currentIndex={currentIndex}
+          flipped={flipped}
+          onIndexChange={handleIndexChange}
+          onFlip={handleFlip}
+          onHideCard={handleHideCard}
+        />
       )}
 
       {mode === "reading" && (

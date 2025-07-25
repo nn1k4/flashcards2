@@ -2,6 +2,87 @@
 import { useState, useCallback, useEffect } from "react";
 import { ErrorInfo } from "../utils/error-handler";
 import { apiClient } from "../services/ApiClient";
+import { defaultConfig } from "../config";
+
+/**
+ * Формирует полный промпт для Claude на основе исходного чанка текста.
+ * Используется при повторной обработке, чтобы запрос был идентичен первичному.
+ */
+function buildPromptFromChunk(chunk: string): string {
+  const config = defaultConfig.processing;
+  const words = chunk.split(/\s+/).filter(w => w.length > 0);
+  const wordCount = words.length;
+  const minEntries = Math.floor(wordCount * 0.9);
+
+  if (config.enablePhraseExtraction) {
+    return (
+      `Analyze these Latvian sentences systematically for Russian learners: "${chunk}"\n\n` +
+      `STEP 1: Extract EVERY INDIVIDUAL WORD (mandatory):\n` +
+      `- Include absolutely ALL words from the text, no exceptions\n` +
+      `- Even small words like "ir", "ar", "šodien", "ļoti", "agri"\n` +
+      `- Different forms of same word (grib AND negrib as separate entries)\n` +
+      `- Pronouns, prepositions, adverbs - everything\n\n` +
+      `STEP 2: Add meaningful phrases (bonus):\n` +
+      `- Common collocations (iebiezinātais piens = сгущенное молоко)\n` +
+      `- Compound expressions (dzimšanas diena = день рождения)\n` +
+      `- Prepositional phrases (pie cepšanas = за выпечкой)\n\n` +
+      `CRITICAL REQUIREMENTS:\n` +
+      `1. Count words in original text and ensure SAME number of individual words in output\n` +
+      `2. Every single word must appear as individual entry\n` +
+      `3. Then add phrases as additional entries\n` +
+      `4. Mark each entry with item_type: "word" or "phrase"\n\n` +
+      `For each item create:\n` +
+      `- front: exact form from text\n` +
+      `- back: Russian translation of this specific form\n` +
+      `- base_form: dictionary form\n` +
+      `- base_translation: Russian translation of dictionary form\n` +
+      `- word_form_translation: translation of the specific form\n` +
+      `- original_phrase: the sentence containing it\n` +
+      `- phrase_translation: Russian translation of the sentence\n` +
+      `- text_forms: [form from text]\n` +
+      `- item_type: "word" or "phrase"\n\n` +
+      `EXAMPLES:\n` +
+      `Word: {"front": "agri", "back": "рано", "item_type": "word"}\n` +
+      `Word: {"front": "šodien", "back": "сегодня", "item_type": "word"}\n` +
+      `Word: {"front": "grib", "back": "хочет", "item_type": "word"}\n` +
+      `Phrase: {"front": "dzimšanas diena", "back": "день рождения", "item_type": "phrase"}\n\n` +
+      `VERIFICATION: Text has approximately ${wordCount} words.\n` +
+      `Your response must include AT LEAST ${minEntries} individual word entries.\n\n` +
+      `Context: \n\n` +
+      `Return valid JSON array of objects.\n` +
+      `CRITICAL: Return ONLY a valid JSON array. No explanations, no text before or after.\n` +
+      `Your response must start with [ and end with ]\n` +
+      `DO NOT include any text like "Here is the analysis" or explanations.\n` +
+      `RESPOND WITH PURE JSON ONLY!`
+    );
+  }
+
+  return (
+    `Extract EVERY individual word from these Latvian sentences: "${chunk}"\n\n` +
+    `CRITICAL: Include absolutely ALL words - no exceptions!\n` +
+    `- Small words: ir, ar, uz, pie, šodien, agri, ļoti\n` +
+    `- All verb forms: grib, negrib, pamostas, dodas\n` +
+    `- All pronouns: viņa, viņas, sev\n` +
+    `- Everything without exception\n\n` +
+    `Target: approximately ${wordCount} word entries.\n\n` +
+    `Create vocabulary cards for Russian learners:\n` +
+    `- front: exact word form from text\n` +
+    `- back: translation of this specific word form in Russian\n` +
+    `- base_form: dictionary form\n` +
+    `- base_translation: translation of dictionary form\n` +
+    `- word_form_translation: translation of the specific form\n` +
+    `- original_phrase: the sentence containing the word\n` +
+    `- phrase_translation: Russian translation of the sentence\n` +
+    `- text_forms: array with the word form\n\n` +
+    `CRITICAL: word_form_translation must match the specific form.\n` +
+    `Example: "mammai" → "маме" (not "мама")\n\n` +
+    `Context: \n\n` +
+    `Return valid JSON array of objects.\n` +
+    `Your response must start with [ and end with ]\n` +
+    `DO NOT include any text like "Here is the analysis" or explanations.\n` +
+    `RESPOND WITH PURE JSON ONLY!`
+  );
+}
 
 export interface QueueItem {
   id: string;
@@ -172,8 +253,9 @@ export function useRetryQueue(): UseRetryQueueReturn {
           item.attempts++;
           item.lastAttemptTime = Date.now();
 
-          // Отправляем запрос через ApiClient
-          const result = await apiClient.request(item.chunk, {
+          // Строим полный промпт и отправляем запрос через ApiClient
+          const prompt = buildPromptFromChunk(item.chunk);
+          const result = await apiClient.request(prompt, {
             chunkInfo: item.chunkInfo || `retry-queue-item-${i + 1}`,
           });
 
