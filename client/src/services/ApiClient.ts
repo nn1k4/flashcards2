@@ -124,6 +124,11 @@ export class ApiClient extends SimpleEventEmitter {
           throw errorData;
         }
 
+        // Поддержка ошибок в виде строки "[Error: ...]" от callClaude
+        if (result.startsWith("[Error:")) {
+          throw new Error(result.slice(1, -1));
+        }
+
         // Успешный результат
         this.stats.successfulRequests++;
 
