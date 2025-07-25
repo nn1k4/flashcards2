@@ -28,6 +28,7 @@ interface APIStatusBarProps {
     isProcessing: boolean;
   };
   onRetryProcessing?: () => Promise<any>;
+  error?: string;
 }
 
 // ОБНОВЛЕННЫЙ APIStatusBar с полной интеграцией retry queue
@@ -36,7 +37,6 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
   retryQueue,
   onRetryProcessing,
   error,
-  processingProgress,
 }) => {
   // Анализ карточек с ошибками (для обратной совместимости со старой системой)
   const cardsNeedingReprocessing = flashcards.filter(
