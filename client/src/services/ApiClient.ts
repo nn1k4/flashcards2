@@ -124,9 +124,11 @@ export class ApiClient extends SimpleEventEmitter {
           throw errorData;
         }
 
-        // Поддержка ошибок в виде строки "[Error: ...]" от callClaude
-        if (result.startsWith("[Error:")) {
-          throw new Error(result.slice(1, -1));
+        // Поддержка ошибок в виде строки "[Error: ...]" или
+        // "[Claude API Error: ...]" от callClaude
+        const errorStringMatch = result.match(/^\[(?:Claude API )?Error: (.+)\]$/);
+        if (errorStringMatch) {
+          throw new Error(errorStringMatch[1]);
         }
 
         // Успешный результат
