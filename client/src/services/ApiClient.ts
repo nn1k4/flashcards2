@@ -8,18 +8,21 @@ import {
   ErrorType,
 } from "../utils/error-handler";
 
+// Тип коллбэка слушателя событий
+type EventCallback = (...args: unknown[]) => void;
+
 // Простая браузерная реализация EventEmitter для избежания зависимости от Node.js
 class SimpleEventEmitter {
-  private events: Map<string, Function[]> = new Map();
+  private events: Map<string, EventCallback[]> = new Map();
 
-  on(event: string, listener: Function): void {
+  on(event: string, listener: EventCallback): void {
     if (!this.events.has(event)) {
       this.events.set(event, []);
     }
     this.events.get(event)!.push(listener);
   }
 
-  off(event: string, listener: Function): void {
+  off(event: string, listener: EventCallback): void {
     const listeners = this.events.get(event);
     if (listeners) {
       const index = listeners.indexOf(listener);
@@ -29,7 +32,7 @@ class SimpleEventEmitter {
     }
   }
 
-  emit(event: string, ...args: any[]): void {
+  emit(event: string, ...args: unknown[]): void {
     const listeners = this.events.get(event);
     if (listeners) {
       listeners.forEach(listener => {
