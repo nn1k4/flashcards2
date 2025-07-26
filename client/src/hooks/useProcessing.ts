@@ -305,9 +305,16 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
 
         console.log("🏁 Retry queue обработан:", results);
 
-        // Если были успешные обработки, обновляем интерфейс
+        if (results.cards && results.cards.length > 0) {
+          results.cards.forEach(card => (card.visible = true));
+          const merged = mergeCardsByBaseForm([...flashcards, ...results.cards]);
+          setFlashcards(merged);
+          setMode("flashcards");
+        }
+
         if (results.successful > 0) {
           setState("ready");
+          setProcessingProgress({ current: 0, total: 0, step: "ready" });
         }
 
         return results;
@@ -319,7 +326,7 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
         setProcessingProgress({ current: 0, total: 0, step: "" });
       }
     },
-    [retryQueue.processQueue]
+    [retryQueue.processQueue, flashcards, setFlashcards, setState, setMode]
   );
 
   // Основная функция обработки текста (чанк-за-чанком)

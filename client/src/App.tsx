@@ -324,6 +324,14 @@ function App() {
     }
   }, [flashcards, currentIndex, toggleCardVisibility]);
 
+  // Полная очистка данных вместе с retry queue
+  const handleClearWithRetry = React.useCallback(() => {
+    clearAll();
+    setCurrentIndex(0);
+    setFlipped(false);
+    setMode("text");
+  }, [clearAll, setMode]);
+
   // Интеграция клавиатурной навигации
   useKeyboardNavigation({
     mode,
@@ -416,7 +424,12 @@ function App() {
       <Header onImport={importData} onExport={exportData} isProcessed={flashcards.length > 0} />
 
       {/* Переключатель режимов */}
-      <ModeSelector currentMode={mode} onModeChange={setMode} />
+      <ModeSelector
+        mode={mode}
+        onChange={setMode}
+        onClear={handleClearWithRetry}
+        isProcessed={flashcards.length > 0}
+      />
 
       {/* ОБНОВЛЕННЫЙ APIStatusBar с retry queue интеграцией */}
       <APIStatusBar

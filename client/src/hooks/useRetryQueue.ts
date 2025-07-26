@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from "react";
 import { ErrorInfo } from "../utils/error-handler";
 import { apiClient } from "../services/ApiClient";
 import { defaultConfig } from "../config";
+import type { FlashcardNew } from "../types";
 
 /**
  * Формирует полный промпт для Claude на основе исходного чанка текста.
@@ -110,6 +111,7 @@ export interface UseRetryQueueReturn {
     processed: number;
     successful: number;
     failed: number;
+    cards: FlashcardNew[];
   }>;
   removeFromQueue: (id: string) => void;
   clearQueue: () => void;
@@ -210,7 +212,12 @@ export function useRetryQueue(): UseRetryQueueReturn {
   const processQueue = useCallback(
     async (
       onProgress?: (current: number, total: number) => void
-    ): Promise<{ processed: number; successful: number; failed: number }> => {
+    ): Promise<{
+      processed: number;
+      successful: number;
+      failed: number;
+      cards: FlashcardNew[];
+    }> => {
       if (isProcessing) {
         console.warn("⚠️ Обработка очереди уже выполняется");
         return { processed: 0, successful: 0, failed: 0 };
@@ -230,6 +237,7 @@ export function useRetryQueue(): UseRetryQueueReturn {
         processed: 0,
         successful: 0,
         failed: 0,
+        cards: [] as FlashcardNew[],
       };
 
       const queueCopy = [...queue];
@@ -242,10 +250,7 @@ export function useRetryQueue(): UseRetryQueueReturn {
           // Обновляем прогресс
           onProgress?.(i + 1, queueCopy.length);
 
-          setStats(prev => ({
-            ...prev,
-            processed: i + 1,
-          }));
+          // Счетчики будут обновлены после попытки
 
           console.log(`🔄 Обработка элемента ${i + 1}/${queueCopy.length}: ${item.id}`);
 
@@ -255,17 +260,52 @@ export function useRetryQueue(): UseRetryQueueReturn {
 
           // Строим полный промпт и отправляем запрос через ApiClient
           const prompt = buildPromptFromChunk(item.chunk);
-          const result = await apiClient.request(prompt, {
+          const raw = await apiClient.request(prompt, {
             chunkInfo: item.chunkInfo || `retry-queue-item-${i + 1}`,
           });
 
-          console.log(`✅ Успешно обработан: ${item.id}`);
+          const cleaned = raw
+            .replace(/```json\s*/g, "")
+            .replace(/```\s*$/g, "")
+            .trim();
 
-          successfulIds.push(item.id);
-          results.successful++;
+          const parsed = JSON.parse(cleaned);
+          const cardsArray = Array.isArray(parsed) ? parsed : [parsed];
+          const processedCards = cardsArray.map(card => ({
+            ...card,
+            id: card.id || `${Date.now()}_${Math.random()}`,
+            visible: true,
+            needsReprocessing: false,
+          }));
+
+          if (processedCards.length > 0) {
+            successfulIds.push(item.id);
+            results.successful++;
+            results.cards.push(...processedCards);
+            setStats(prev => ({
+              ...prev,
+              processed: i + 1,
+              failed: prev.failed,
+            }));
+            console.log(`✅ Успешно обработан: ${item.id}`);
+          } else {
+            results.failed++;
+            setStats(prev => ({
+              ...prev,
+              processed: i + 1,
+              failed: prev.failed + 1,
+            }));
+            console.log(`❌ Пустой результат для ${item.id}`);
+          }
         } catch (error) {
           console.log(`❌ Ошибка при обработке ${item.id}:`, error);
           results.failed++;
+
+          setStats(prev => ({
+            ...prev,
+            processed: i + 1,
+            failed: prev.failed + 1,
+          }));
 
           // Обновляем информацию об ошибке в элементе очереди
           if (error && typeof error === "object") {
