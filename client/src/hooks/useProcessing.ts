@@ -36,7 +36,9 @@ interface ApiCard {
 export function useProcessing(
   inputText: string,
   setMode: (mode: AppMode) => void,
-  setInputText?: (text: string) => void
+  setInputText?: (text: string) => void,
+  setCurrentIndex?: (index: number) => void,
+  setFlipped?: (flipped: boolean) => void
 ) {
   // Основные состояния приложения
   const [state, setState] = React.useState<AppState>("input");
@@ -284,8 +286,8 @@ export function useProcessing(
                 word_form_translation: formTrans,
                 base_form: baseForm,
                 base_translation: baseTrans,
-                original_phrase: chunk,
-                phrase_translation: "",
+                original_phrase: card.original_phrase || chunk,
+                phrase_translation: card.phrase_translation || "",
                 text_forms: textForms,
                 visible: true,
               } as FlashcardOld,
@@ -391,6 +393,8 @@ export function useProcessing(
           setFlashcards(merged);
           generateTranslation(merged);
           setMode("flashcards");
+          setCurrentIndex?.(0);
+          setFlipped?.(false);
         }
 
         if (results.successful > 0) {
@@ -480,8 +484,10 @@ export function useProcessing(
       // Устанавливаем финальные данные
       setFlashcards(mergedCards);
       generateTranslation(mergedCards);
-      setState("ready");
       setMode("flashcards");
+      setCurrentIndex?.(0);
+      setFlipped?.(false);
+      setState("ready");
     } catch (error) {
       console.error("💥 Критическая ошибка обработки:", error);
       setState("input");

@@ -307,7 +307,7 @@ function App() {
     // НОВЫЕ поля для retry
     processRetryQueue,
     retryQueue,
-  } = useProcessing(inputText, setMode, setInputText);
+  } = useProcessing(inputText, setMode, setInputText, setCurrentIndex, setFlipped);
 
   // Колбэки для навигации по карточкам
   const handleIndexChange = React.useCallback((idx: number) => {
