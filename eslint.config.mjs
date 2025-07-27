@@ -130,7 +130,12 @@ export default defineConfig([
     },
     rules: {
       // Отключаем правила форматирования ESLint в пользу Prettier
-      "prettier/prettier": "error",
+      "prettier/prettier": [
+        "error",
+        {
+          endOfLine: "lf",
+        },
+      ],
     },
   },
 ]);

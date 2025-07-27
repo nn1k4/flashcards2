@@ -1,4 +1,4 @@
-Здесь я пытаюсь решить проблему обработки ошибок API 
+Здесь я пытаюсь решить проблему обработки ошибок API
 Полезные ссылки которые я обнаружил в процессе работы:
 https://apidog.com/blog/claude-api-rate-limits/
 https://www.cursor-ide.com/blog/claude-api-429-error-fix-en
@@ -6,7 +6,7 @@ https://www.cursor-ide.com/blog/claude-api-429-error-fix-en
 -------------------
 Проанализируй документацию Claude API  и
 сфокусируйся на этой ее части https://docs.anthropic.com/en/api/messages
-загугли лучшие практики по обработке ошибок при работе с API Claude, сфокусировавшись на 
+загугли лучшие практики по обработке ошибок при работе с API Claude, сфокусировавшись на
 
 -  Exponential backoff с retry-after header
 -  Rate limit monitoring через response headers
@@ -35,15 +35,15 @@ https://www.cursor-ide.com/blog/claude-api-429-error-fix-en
 	-  Понятные карточки вместо технических сообщений
 	- Флаги needsReprocessing для проблемных чанков
 	- Улучшенная обработка API ошибок
-	
+
 - добавили компонент 	APIStatusBar в client/src/App.tsx
 	Показывает состояние API
      Кнопка повторной обработки
      Понятные сообщения для пользователя
-	 
-   - интегировали APIStatusBar в JSX 
+
+   - интегировали APIStatusBar в JSX
 		- Добавили <APIStatusBar flashcards={flashcards} /> в client\src\App.tsx и передали  flashcards как props
- 
+
 Теперь вместо технических сообщений:
 	```
 	[Translation needed: pamostas]
@@ -56,12 +56,12 @@ https://www.cursor-ide.com/blog/claude-api-429-error-fix-en
 		🔄 Кнопка действия: "Повторить обработку"
 		⏱️ Полезная информация: "Обычно перегрузка длится 10-30 минут"
 		📋 Список проблемных чанков с превьюшками текста
-		
+
 АНАЛИЗ ТЕКУЩЕЙ РЕАЛИЗАЦИИ
 
 Что уже работает отлично:
 
-1. claude.ts: Exponential backoff с jitter, мониторинг rate limit headers, обработка 529/429 ошибок 
+1. claude.ts: Exponential backoff с jitter, мониторинг rate limit headers, обработка 529/429 ошибок
 Изучи эти ссылки для понимания контекста:
 	https://apidog.com/blog/claude-api-rate-limits/
 	https://www.cursor-ide.com/blog/claude-api-429-error-fix-en
@@ -132,14 +132,14 @@ const calculateAdaptiveDelay = (
   retryAfter?: string
 ): number => {
   const strategy = RETRY_CONFIG.specialCases.get(statusCode);
-  
+
   if (!strategy) {
     // Стандартная стратегия
     const exponentialDelay = Math.min(
       RETRY_CONFIG.baseDelay * Math.pow(2, attempt - 1),
       RETRY_CONFIG.maxDelay
     );
-    
+
     // Добавляем jitter для предотвращения thundering herd
     const jitter = exponentialDelay * RETRY_CONFIG.jitterFactor * Math.random();
     return exponentialDelay + jitter;
@@ -170,7 +170,7 @@ const shouldRetry = (statusCode: number, attempt: number): boolean => {
 
   const strategy = RETRY_CONFIG.specialCases.get(statusCode);
   const maxRetries = strategy?.maxRetries || RETRY_CONFIG.maxRetries;
-  
+
   return attempt <= maxRetries;
 };
 
@@ -210,7 +210,7 @@ for (let attempt = 1; attempt <= maxRetries; attempt++) {
       if (shouldRetry(response.status, attempt)) {
         const retryAfter = response.headers.get("retry-after");
         const delay = calculateAdaptiveDelay(attempt, response.status, retryAfter || undefined);
-        
+
         console.log(`🔄 Retrying (attempt ${attempt}): status ${response.status}, delay ${formatDuration(delay)}`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
@@ -227,7 +227,7 @@ for (let attempt = 1; attempt <= maxRetries; attempt++) {
     }
 
     // ... остальной код обработки успешного ответа остается без изменений ...
-    
+
   } catch (err) {
     lastError = err;
     const error = err as Error;
@@ -325,7 +325,7 @@ const processRetryQueue = React.useCallback(async (onProgress?: (current: number
 
   for (let i = 0; i < queueCopy.length; i++) {
     const chunk = queueCopy[i];
-    
+
     // Сообщаем о прогрессе
     onProgress?.(i + 1, queueCopy.length);
 
@@ -341,10 +341,10 @@ const processRetryQueue = React.useCallback(async (onProgress?: (current: number
 
       // Повторяем обработку чанка
       const result = await processChunkWithContext(chunk.text);
-      
+
       if (result && result.length > 0) {
         // Успешная обработка - обновляем карточки
-        const successCards = result.filter(card => 
+        const successCards = result.filter(card =>
           !card.front?.includes('Требуется обработка') &&
           !card.front?.includes('Превышен лимит') &&
           !card.front?.includes('Ошибка обработки')
@@ -355,14 +355,14 @@ const processRetryQueue = React.useCallback(async (onProgress?: (current: number
           setFlashcards(prev => {
             const updated = [...prev];
             // Находим и заменяем карточки с ошибками
-            const cardsToReplace = updated.filter(card => 
+            const cardsToReplace = updated.filter(card =>
               card.base_form?.includes('retry_needed') ||
               card.base_form?.includes('rate_limit') ||
               card.base_form?.includes('Error in chunk')
             );
 
             // Удаляем старые проблемные карточки
-            const cleanedCards = updated.filter(card => 
+            const cleanedCards = updated.filter(card =>
               !card.base_form?.includes('retry_needed') &&
               !card.base_form?.includes('rate_limit') &&
               !card.base_form?.includes('Error in chunk')
@@ -383,7 +383,7 @@ const processRetryQueue = React.useCallback(async (onProgress?: (current: number
 
     } catch (error) {
       console.error(`❌ Retry failed for chunk ${chunk.id}:`, error);
-      
+
       // Увеличиваем счетчик попыток
       const updatedChunk = {
         ...chunk,
@@ -410,7 +410,7 @@ const processRetryQueue = React.useCallback(async (onProgress?: (current: number
   }));
 
   console.log(`🏁 Retry queue completed: ${successCount}/${queueCopy.length} successful`);
-  
+
   return {
     total: queueCopy.length,
     successful: successCount,
@@ -430,7 +430,7 @@ const getRetryDelay = (errorType: FailedChunk['errorType'], attempt: number): nu
   const base = baseDelays[errorType];
   const exponential = base * Math.pow(1.5, attempt - 1);
   const jitter = exponential * 0.1 * Math.random();
-  
+
   return Math.min(exponential + jitter, 60000); // max 1 минута
 };
 
@@ -460,10 +460,10 @@ const getMaxRetries = (errorType: FailedChunk['errorType']): number => {
 // СТАЛО:
 if (raw.includes("[Error: Claude API temporarily overloaded") || raw.includes("HTTP Error 529")) {
   console.log("⚠️ API overload detected - adding to retry queue");
-  
+
   // Добавляем в очередь retry вместо создания карточки с ошибкой
   addToRetryQueue(chunk, "API overloaded (529)", 0);
-  
+
   // Возвращаем временную карточку-маркер
   const placeholderCards: FlashcardOld[] = [{
     front: `Требуется обработка`,
@@ -483,9 +483,9 @@ if (raw.includes("[Error: Claude API temporarily overloaded") || raw.includes("H
 // Аналогично для rate limit ошибок:
 if (raw.includes("[Error: Rate limit exceeded") || raw.includes("HTTP Error 429")) {
   console.log("⚠️ Rate limit detected - adding to retry queue");
-  
+
   addToRetryQueue(chunk, "Rate limit exceeded (429)", 0);
-  
+
   const placeholderCards: FlashcardOld[] = [{
     front: `Превышен лимит запросов`,
     back: `Чанк добавлен в очередь повторной обработки`,
@@ -504,7 +504,7 @@ if (raw.includes("[Error: Rate limit exceeded") || raw.includes("HTTP Error 429"
 // Экспортируем новые функции из хука
 return {
   // ... существующие возвращаемые значения ...
-  
+
   // НОВОЕ: функции для работы с retry queue
   processRetryQueue,
   retryQueue,
@@ -534,10 +534,10 @@ interface APIStatusBarProps {
   };
 }
 
-const APIStatusBar: React.FC<APIStatusBarProps> = ({ 
-  flashcards, 
-  onRetryProcessing, 
-  retryQueue 
+const APIStatusBar: React.FC<APIStatusBarProps> = ({
+  flashcards,
+  onRetryProcessing,
+  retryQueue
 }) => {
   // Локальное состояние для обработки retry
   const [isRetrying, setIsRetrying] = React.useState(false);
@@ -574,20 +574,20 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
   // Определяем тип проблемы
   const hasOverloadErrors = cardsNeedingReprocessing.some(
     card =>
-      card.base_translation?.includes("Требуется обработка") || 
+      card.base_translation?.includes("Требуется обработка") ||
       card.base_translation?.includes("API временно перегружен") ||
       card.base_form?.includes("retry_needed")
   );
 
   const hasRateLimitErrors = cardsNeedingReprocessing.some(
-    card => 
+    card =>
       card.base_translation?.includes("Превышен лимит") ||
       card.base_form?.includes("rate_limit")
   );
 
   const hasCriticalErrors = cardsNeedingReprocessing.some(
-    card => 
-      card.base_translation?.includes("Ошибка обработки") || 
+    card =>
+      card.base_translation?.includes("Ошибка обработки") ||
       card.base_translation?.includes("Критическая ошибка")
   );
 
@@ -598,12 +598,12 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
     try {
       setIsRetrying(true);
       setRetryProgress({ current: 0, total: cardsNeedingReprocessing.length });
-      
+
       console.log(`🔄 Starting retry processing: ${cardsNeedingReprocessing.length} cards`);
 
       // Вызываем функцию retry с обратной связью по прогрессу
       const result = await onRetryProcessing();
-      
+
       setLastRetryResult({
         ...result,
         timestamp: Date.now(),
@@ -644,7 +644,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
         color: "bg-blue-100 border-blue-400 text-blue-700",
         icon: "🔄",
         title: "Повторная обработка...",
-        message: retryProgress 
+        message: retryProgress
           ? `Обрабатывается ${retryProgress.current} из ${retryProgress.total} чанков`
           : "Повторная обработка в процессе...",
         suggestion: "Пожалуйста, подождите. Это может занять несколько минут.",
@@ -736,10 +736,10 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
           {isRetrying && retryProgress && (
             <div className="mb-3">
               <div className="w-full bg-white bg-opacity-50 rounded-full h-2">
-                <div 
+                <div
                   className="bg-current h-2 rounded-full transition-all duration-300"
-                  style={{ 
-                    width: `${Math.round((retryProgress.current / retryProgress.total) * 100)}%` 
+                  style={{
+                    width: `${Math.round((retryProgress.current / retryProgress.total) * 100)}%`
                   }}
                 ></div>
               </div>
@@ -799,8 +799,8 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
                   : "bg-white border border-current hover:bg-opacity-80"
               }`}
               title={
-                isRetrying 
-                  ? "Обработка в процессе..." 
+                isRetrying
+                  ? "Обработка в процессе..."
                   : `Повторить обработку ${cardsNeedingReprocessing.length} чанков`
               }
             >
@@ -828,7 +828,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
           </div>
           {retryQueue && (
             <div>
-              Очередь retry: {retryQueue.queue.length} в ожидании, 
+              Очередь retry: {retryQueue.queue.length} в ожидании,
               {retryQueue.isProcessing ? " обработка..." : " простой"}
             </div>
           )}
@@ -853,7 +853,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
 
 Сначала набросай черновик интеграции в App.tsx, затем набросай улучшения proxy сервера.
 
-4. Черновик интеграции retry механизма в App.tsx		
+4. Черновик интеграции retry механизма в App.tsx
 ```
 // УЛУЧШЕНИЕ 4: Интеграция retry механизма в client/src/App.tsx
 // Модификация главного компонента для поддержки retry функциональности
@@ -875,7 +875,7 @@ const {
   setTranslationText,
   setState,
   setFormTranslations,
-  
+
   // НОВОЕ: добавляем функции для retry
   processRetryQueue,
   retryQueue,
@@ -923,7 +923,7 @@ const handleRetryProcessing = React.useCallback(async () => {
     if (result.successful > 0) {
       // Можно добавить toast уведомление или другую обратную связь
       console.log(`🎉 Successfully processed ${result.successful} chunks!`);
-      
+
       // Если все успешно, очищаем режим ошибки
       if (result.remaining === 0) {
         // Переключаемся в режим карточек для просмотра результатов
@@ -937,7 +937,7 @@ const handleRetryProcessing = React.useCallback(async () => {
 
   } catch (error) {
     console.error('❌ Error in handleRetryProcessing:', error);
-    
+
     // Возвращаем результат с ошибкой
     return {
       total: retryQueue?.queue?.length || 0,
@@ -1011,7 +1011,7 @@ const hasRetryableData = retryQueue && retryQueue.queue.length > 0;
 // Заменить существующий <APIStatusBar flashcards={flashcards} /> на:
 const renderAPIStatusBar = () => {
   // Показываем status bar если есть проблемные карточки ИЛИ retry очередь
-  const needsRetryProcessing = flashcards.some(card => 
+  const needsRetryProcessing = flashcards.some(card =>
     (card as FlashcardNew & { needsReprocessing?: boolean }).needsReprocessing ||
     card.base_translation?.includes("[Translation needed:") ||
     card.phrase_translation?.includes("[Chunk translation needed:") ||
@@ -1025,8 +1025,8 @@ const renderAPIStatusBar = () => {
   }
 
   return (
-    <APIStatusBar 
-      flashcards={flashcards} 
+    <APIStatusBar
+      flashcards={flashcards}
       onRetryProcessing={handleRetryProcessing}
       retryQueue={retryQueue}
     />
@@ -1059,7 +1059,7 @@ const renderRetryStats = () => {
               <span>В очереди: {retryQueue?.queue?.length || 0}</span>
             )}
           </div>
-          
+
           {retryStats.lastRetryTime && (
             <span className="text-xs opacity-75">
               Последняя обработка: {new Date(retryStats.lastRetryTime).toLocaleTimeString()}
@@ -1104,8 +1104,8 @@ React.useEffect(() => {
   console.log('🔄 Retry system state:', {
     retryQueueLength: retryQueue?.queue?.length || 0,
     retryInProgress,
-    hasRetryableCards: flashcards.filter(card => 
-      card.base_form?.includes("retry_needed") || 
+    hasRetryableCards: flashcards.filter(card =>
+      card.base_form?.includes("retry_needed") ||
       card.base_form?.includes("rate_limit")
     ).length,
     retryStats,
@@ -1114,10 +1114,10 @@ React.useEffect(() => {
 ```
 
 Оцени текущую реализацию, оцени предложенные черновики артефактов для внедрения их в текущую кодовую базу
-проверь насколько они не нарушают функциональность работающего кода. Перепиши их если они содержат ошибки и конфликтуют с кодовой базой. 
+проверь насколько они не нарушают функциональность работающего кода. Перепиши их если они содержат ошибки и конфликтуют с кодовой базой.
 Помоги мне внедрить их так чтобы мне было четко понятно что куда нужно вставлять.
  и предложи уже проверенные тобой правки  без нарушения уже работающего функционала текущей кодовой базы.
- 
+
 Оценка предложенных улучшений:
 После анализа кодовой базы и скриншотов, вижу следующие проблемы с предложенными черновиками:
 Черновик 1 (claude.ts) - содержит ошибки:
@@ -1136,7 +1136,7 @@ React.useEffect(() => {
 Черновик 4 (App.tsx) - требует переработки:
 	- Много дублирования кода
 	- Не учитывает текущую структуру
-	
+
 Предлагаю поэтапный подход:
 Этап 1: Минимальные улучшения (быстрый результат)
 ```
@@ -1169,7 +1169,7 @@ const calculateBackoffDelay = (attempt: number, retryAfter?: string, statusCode?
   }
 
   // Выбираем конфигурацию по типу ошибки
-  const config = statusCode && RETRY_CONFIG.delays[statusCode as keyof typeof RETRY_CONFIG.delays] 
+  const config = statusCode && RETRY_CONFIG.delays[statusCode as keyof typeof RETRY_CONFIG.delays]
     ? RETRY_CONFIG.delays[statusCode as keyof typeof RETRY_CONFIG.delays]
     : RETRY_CONFIG.delays.default;
 
@@ -1178,11 +1178,11 @@ const calculateBackoffDelay = (attempt: number, retryAfter?: string, statusCode?
     config.base * Math.pow(config.multiplier, attempt - 1),
     60000 // максимум 1 минута
   );
-  
+
   // Добавляем jitter для предотвращения thundering herd
   const jitter = exponentialDelay * 0.1 * Math.random();
   const totalDelay = exponentialDelay + jitter;
-  
+
   console.log(`🕐 Calculated delay for attempt ${attempt} (status ${statusCode}): ${formatDuration(totalDelay)}`);
   return totalDelay;
 };
@@ -1193,7 +1193,7 @@ const calculateBackoffDelay = (attempt: number, retryAfter?: string, statusCode?
 const delay = calculateBackoffDelay(attempt, retryAfter || undefined, response.status);
 
 // ========================================
-// 2. УЛУЧШЕНИЕ useProcessing.ts - Простой retry механизм  
+// 2. УЛУЧШЕНИЕ useProcessing.ts - Простой retry механизм
 // ========================================
 // Добавить в хук useProcessing после строки ~20:
 
@@ -1209,7 +1209,7 @@ const [retryQueue, setRetryQueue] = React.useState<{
 // Функция для повторной обработки проблемных карточек
 const retryFailedChunks = React.useCallback(async () => {
   // Находим все карточки с флагом needsReprocessing
-  const problemCards = flashcards.filter(card => 
+  const problemCards = flashcards.filter(card =>
     card.base_form?.includes('retry_needed') ||
     card.base_form?.includes('rate_limit') ||
     card.base_translation?.includes('[Translation needed:') ||
@@ -1232,7 +1232,7 @@ const retryFailedChunks = React.useCallback(async () => {
   for (const problemCard of problemCards) {
     // Извлекаем оригинальный текст из контекста
     const originalText = problemCard.contexts?.[0]?.original_phrase || '';
-    
+
     if (!originalText) {
       console.warn('⚠️ Не найден оригинальный текст для карточки:', problemCard.base_form);
       failedCount++;
@@ -1241,16 +1241,16 @@ const retryFailedChunks = React.useCallback(async () => {
 
     try {
       console.log(`🔄 Повторная обработка чанка: "${originalText.substring(0, 50)}..."`);
-      
+
       // Задержка между запросами
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // Повторно обрабатываем чанк
       const newCards = await processChunkWithContext(originalText);
-      
+
       if (newCards && newCards.length > 0) {
         // Фильтруем успешные карточки
-        const validCards = newCards.filter(card => 
+        const validCards = newCards.filter(card =>
           !card.front?.includes('Требуется обработка') &&
           !card.front?.includes('Превышен лимит')
         );
@@ -1258,12 +1258,12 @@ const retryFailedChunks = React.useCallback(async () => {
         if (validCards.length > 0) {
           // Заменяем проблемные карточки на новые
           setFlashcards(prev => {
-            const updated = prev.filter(card => 
+            const updated = prev.filter(card =>
               card.base_form !== problemCard.base_form
             );
             return [...updated, ...mergeCardsByBaseForm(validCards)];
           });
-          
+
           successCount++;
           console.log(`✅ Успешно обработан чанк: ${validCards.length} карточек`);
         } else {
@@ -1322,10 +1322,10 @@ onClick={async () => {
     const button = event.currentTarget as HTMLButtonElement;
     button.disabled = true;
     button.textContent = '🔄 Обработка...';
-    
+
     try {
       const result = await onRetryProcessing();
-      
+
       if (result.successful === result.total) {
         button.textContent = '✅ Готово!';
         setTimeout(() => {
@@ -1359,8 +1359,8 @@ onClick={async () => {
 // И передать функцию в APIStatusBar (строка ~176):
 // <APIStatusBar flashcards={flashcards} />
 // ЗАМЕНИТЬ НА:
-<APIStatusBar 
-  flashcards={flashcards} 
+<APIStatusBar
+  flashcards={flashcards}
   onRetryProcessing={retryFailedChunks}
 />
 
@@ -1425,7 +1425,7 @@ const calculateBackoffDelay = (attempt: number, retryAfter?: string, statusCode?
   }
 
   // Выбираем конфигурацию по типу ошибки
-  const config = statusCode && RETRY_CONFIG.delays[statusCode as keyof typeof RETRY_CONFIG.delays] 
+  const config = statusCode && RETRY_CONFIG.delays[statusCode as keyof typeof RETRY_CONFIG.delays]
     ? RETRY_CONFIG.delays[statusCode as keyof typeof RETRY_CONFIG.delays]
     : RETRY_CONFIG.delays.default;
 
@@ -1434,11 +1434,11 @@ const calculateBackoffDelay = (attempt: number, retryAfter?: string, statusCode?
     config.base * Math.pow(config.multiplier, attempt - 1),
     60000 // максимум 1 минута
   );
-  
+
   // Добавляем jitter для предотвращения thundering herd
   const jitter = exponentialDelay * 0.1 * Math.random();
   const totalDelay = exponentialDelay + jitter;
-  
+
   console.log(`🕐 Calculated delay for attempt ${attempt} (status ${statusCode}): ${formatDuration(totalDelay)}`);
   return totalDelay;
 };
@@ -1477,7 +1477,7 @@ const [retryQueue, setRetryQueue] = React.useState<{
 // Функция для повторной обработки проблемных карточек
 const retryFailedChunks = React.useCallback(async () => {
   // Находим все карточки с флагом needsReprocessing
-  const problemCards = flashcards.filter(card => 
+  const problemCards = flashcards.filter(card =>
     card.base_form?.includes('retry_needed') ||
     card.base_form?.includes('rate_limit') ||
     card.base_translation?.includes('[Translation needed:') ||
@@ -1500,7 +1500,7 @@ const retryFailedChunks = React.useCallback(async () => {
   for (const problemCard of problemCards) {
     // Извлекаем оригинальный текст из контекста
     const originalText = problemCard.contexts?.[0]?.original_phrase || '';
-    
+
     if (!originalText) {
       console.warn('⚠️ Не найден оригинальный текст для карточки:', problemCard.base_form);
       failedCount++;
@@ -1509,16 +1509,16 @@ const retryFailedChunks = React.useCallback(async () => {
 
     try {
       console.log(`🔄 Повторная обработка чанка: "${originalText.substring(0, 50)}..."`);
-      
+
       // Задержка между запросами
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // Повторно обрабатываем чанк
       const newCards = await processChunkWithContext(originalText);
-      
+
       if (newCards && newCards.length > 0) {
         // Фильтруем успешные карточки
-        const validCards = newCards.filter(card => 
+        const validCards = newCards.filter(card =>
           !card.front?.includes('Требуется обработка') &&
           !card.front?.includes('Превышен лимит')
         );
@@ -1526,12 +1526,12 @@ const retryFailedChunks = React.useCallback(async () => {
         if (validCards.length > 0) {
           // Заменяем проблемные карточки на новые
           setFlashcards(prev => {
-            const updated = prev.filter(card => 
+            const updated = prev.filter(card =>
               card.base_form !== problemCard.base_form
             );
             return [...updated, ...mergeCardsByBaseForm(validCards)];
           });
-          
+
           successCount++;
           console.log(`✅ Успешно обработан чанк: ${validCards.length} карточек`);
         } else {
@@ -1564,13 +1564,13 @@ const retryFailedChunks = React.useCallback(async () => {
 ```typescript
 return {
   // ... существующие возвращаемые значения ...
-  
+
   // Сеттеры для компонентов
   setFlashcards,
   setTranslationText,
   setState,
   setFormTranslations,
-  
+
   // ДОБАВИТЬ ЭТИ ДВЕ СТРОКИ:
   retryFailedChunks,
   retryQueue,
@@ -1625,10 +1625,10 @@ onClick={async (event) => {
     const button = event.currentTarget as HTMLButtonElement;
     button.disabled = true;
     button.textContent = '🔄 Обработка...';
-    
+
     try {
       const result = await onRetryProcessing();
-      
+
       if (result.successful === result.total) {
         button.textContent = '✅ Готово!';
         setTimeout(() => {
@@ -1669,8 +1669,8 @@ onClick={async (event) => {
 
 На:
 ```typescript
-<APIStatusBar 
-  flashcards={flashcards} 
+<APIStatusBar
+  flashcards={flashcards}
   onRetryProcessing={retryFailedChunks}
 />
 ```
@@ -1710,7 +1710,7 @@ if (response.status === 529 || response.status === 429) {
 
 1. **Задержка между retry**: 2 секунды между попытками для каждого чанка
 2. **Максимум попыток**: 5 для каждого запроса к API
-3. **Адаптивные задержки**: 
+3. **Адаптивные задержки**:
    - 529 ошибки: начинаем с 10 секунд
    - 429 ошибки: начинаем с 5 секунд
    - Остальные: начинаем с 1 секунды
@@ -1723,7 +1723,7 @@ if (response.status === 529 || response.status === 429) {
 4. **Безопасная замена**: Проблемные карточки заменяются только при успешной обработке
  ```
  Создал подробное руководство по внедрению. Теперь нужно объяснить преимущества этого подхода.
- 
+
  CRITIC AGENT (Critical analysis):
 ✅ Преимущества предложенного решения:
 
@@ -1797,9 +1797,9 @@ APIStatusBar не появляется при некоторых ошибках
 const retryFailedChunks = React.useCallback(async () => {
   // Находим УНИКАЛЬНЫЕ проблемные карточки по base_form
   const problemCardsMap = new Map<string, FlashcardNew>();
-  
+
   flashcards.forEach(card => {
-    const isProblematic = 
+    const isProblematic =
       card.base_form?.includes('retry_needed') ||
       card.base_form?.includes('rate_limit') ||
       card.base_form?.includes('network_error') ||
@@ -1809,7 +1809,7 @@ const retryFailedChunks = React.useCallback(async () => {
       card.base_translation?.includes('Превышен лимит') ||
       card.base_translation?.includes('Ошибка сети') ||
       card.base_translation?.includes('Прокси сервер недоступен');
-    
+
     if (isProblematic && card.base_form) {
       // Используем Map чтобы избежать дублирования
       problemCardsMap.set(card.base_form, card);
@@ -1832,9 +1832,9 @@ const retryFailedChunks = React.useCallback(async () => {
 
   for (const problemCard of problemCards) {
     // Извлекаем оригинальный текст
-    const originalText = problemCard.contexts?.[0]?.original_phrase || 
+    const originalText = problemCard.contexts?.[0]?.original_phrase ||
                         problemCard.original_phrase || '';
-    
+
     if (!originalText) {
       console.warn('⚠️ Не найден оригинальный текст для карточки:', problemCard.base_form);
       failedCount++;
@@ -1850,16 +1850,16 @@ const retryFailedChunks = React.useCallback(async () => {
 
     try {
       console.log(`🔄 Повторная обработка чанка: "${originalText.substring(0, 50)}..."`);
-      
+
       // Задержка между запросами
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // Повторно обрабатываем чанк
       const newCards = await processChunkWithContext(originalText);
-      
+
       if (newCards && newCards.length > 0) {
         // Фильтруем успешные карточки
-        const validCards = newCards.filter(card => 
+        const validCards = newCards.filter(card =>
           !card.front?.includes('Требуется обработка') &&
           !card.front?.includes('Превышен лимит') &&
           !card.front?.includes('Ошибка сети') &&
@@ -1870,11 +1870,11 @@ const retryFailedChunks = React.useCallback(async () => {
           // ВАЖНО: Удаляем ВСЕ проблемные карточки для этого чанка
           setFlashcards(prev => {
             // Находим все карточки от этого чанка
-            const cardsFromThisChunk = prev.filter(card => 
+            const cardsFromThisChunk = prev.filter(card =>
               card.contexts?.[0]?.original_phrase === originalText ||
               card.original_phrase === originalText
             );
-            
+
             // Удаляем все проблемные карточки этого чанка
             const filteredCards = prev.filter(card => {
               const isFromThisChunk = card.contexts?.[0]?.original_phrase === originalText ||
@@ -1883,15 +1883,15 @@ const retryFailedChunks = React.useCallback(async () => {
                                    card.base_form?.includes('rate_limit') ||
                                    card.base_form?.includes('network_error') ||
                                    card.base_form?.includes('proxy_error');
-              
+
               // Оставляем карточку если она НЕ из этого чанка ИЛИ НЕ проблемная
               return !(isFromThisChunk && isProblematic);
             });
-            
+
             // Добавляем новые валидные карточки
             return [...filteredCards, ...mergeCardsByBaseForm(validCards)];
           });
-          
+
           successCount++;
           console.log(`✅ Успешно обработан чанк: ${validCards.length} карточек`);
         } else {
@@ -1927,12 +1927,12 @@ const retryFailedChunks = React.useCallback(async () => {
 // Проверка на ошибки прокси сервера
 if (raw.includes("fetch failed") || raw.includes("ENOTFOUND") || raw.includes("ECONNRESET")) {
   console.log("❌ Proxy server error detected");
-  
+
   const errorType = raw.includes("ENOTFOUND") ? "network_error" : "proxy_error";
-  const errorMessage = raw.includes("ENOTFOUND") 
+  const errorMessage = raw.includes("ENOTFOUND")
     ? "Ошибка сети: проверьте подключение к интернету"
     : "Прокси сервер недоступен: запустите server (npm run start)";
-  
+
   const networkErrorCards: FlashcardOld[] = [{
     front: errorMessage,
     back: `Не удалось обработать текст из-за проблем с сетью`,
@@ -1953,12 +1953,12 @@ if (raw.includes("fetch failed") || raw.includes("ENOTFOUND") || raw.includes("E
 // ========================================
 // ЗАМЕНИТЬ компонент APIStatusBar полностью:
 
-const APIStatusBar: React.FC<APIStatusBarProps> = ({ 
-  flashcards, 
-  onRetryProcessing 
+const APIStatusBar: React.FC<APIStatusBarProps> = ({
+  flashcards,
+  onRetryProcessing
 }) => {
   const [isRetrying, setIsRetrying] = React.useState(false);
-  
+
   // Подсчитываем карточки по типам ошибок
   const errorStats = React.useMemo(() => {
     const stats = {
@@ -1972,7 +1972,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
     };
 
     flashcards.forEach(card => {
-      const needsReprocessing = 
+      const needsReprocessing =
         (card as FlashcardNew & { needsReprocessing?: boolean }).needsReprocessing ||
         card.base_translation?.includes("[Translation needed:") ||
         card.phrase_translation?.includes("[Chunk translation needed:") ||
@@ -1988,26 +1988,26 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
 
       if (needsReprocessing) {
         stats.total++;
-        
+
         // Добавляем чанк в Set для подсчета уникальных
-        const chunkText = card.contexts?.[0]?.original_phrase || 
-                         card.original_phrase || 
+        const chunkText = card.contexts?.[0]?.original_phrase ||
+                         card.original_phrase ||
                          card.base_form || '';
         if (chunkText) {
           stats.chunks.add(chunkText);
         }
 
         // Классифицируем тип ошибки
-        if (card.base_form?.includes("retry_needed") || 
+        if (card.base_form?.includes("retry_needed") ||
             card.base_translation?.includes("Требуется обработка")) {
           stats.overload++;
-        } else if (card.base_form?.includes("rate_limit") || 
+        } else if (card.base_form?.includes("rate_limit") ||
                    card.base_translation?.includes("Превышен лимит")) {
           stats.rateLimit++;
-        } else if (card.base_form?.includes("network_error") || 
+        } else if (card.base_form?.includes("network_error") ||
                    card.base_translation?.includes("Ошибка сети")) {
           stats.network++;
-        } else if (card.base_form?.includes("proxy_error") || 
+        } else if (card.base_form?.includes("proxy_error") ||
                    card.base_translation?.includes("Прокси сервер недоступен")) {
           stats.proxy++;
         } else {
@@ -2087,10 +2087,10 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
           card.base_form?.includes("rate_limit") ||
           card.base_form?.includes("network_error") ||
           card.base_form?.includes("proxy_error")) {
-        
-        const chunkText = card.contexts?.[0]?.original_phrase || 
+
+        const chunkText = card.contexts?.[0]?.original_phrase ||
                          card.original_phrase || '';
-        
+
         if (chunkText && !seen.has(chunkText)) {
           seen.add(chunkText);
           chunks.push(chunkText);
@@ -2144,7 +2144,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
               <div>Проблемных карточек: {errorStats.total}</div>
               <div>Уникальных чанков: {errorStats.chunks.size}</div>
               <div>
-                Типы ошибок: 
+                Типы ошибок:
                 {errorStats.proxy > 0 && ` прокси (${errorStats.proxy})`}
                 {errorStats.network > 0 && ` сеть (${errorStats.network})`}
                 {errorStats.overload > 0 && ` перегрузка (${errorStats.overload})`}
@@ -2170,10 +2170,10 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
                 button.disabled = true;
                 button.textContent = '🔄 Обработка...';
                 setIsRetrying(true);
-                
+
                 try {
                   const result = await onRetryProcessing();
-                  
+
                   if (result.successful === result.total) {
                     button.textContent = '✅ Готово!';
                     setTimeout(() => {
@@ -2214,7 +2214,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
                 : "bg-white border border-current hover:bg-opacity-80"
             }`}
             title={
-              !statusInfo.canRetry 
+              !statusInfo.canRetry
                 ? statusInfo.suggestion
                 : `Повторить обработку ${errorStats.chunks.size} чанков`
             }
@@ -2310,10 +2310,10 @@ if (raw.includes("fetch failed") || raw.includes("ENOTFOUND") || raw.includes("E
 - Превью показывает реальные чанки
 - Правильные рекомендации для каждого типа ошибки
  ```
- 
- Я внес правки в текущий проект из "Доработки Этапа 1" и произвел тестирование. 
+
+ Я внес правки в текущий проект из "Доработки Этапа 1" и произвел тестирование.
 Изучив резульаты теста вижу следующие проблемы после внедрения доработок Этапа 1:
- 
+
  Тест 1 (без прокси сервера):
 
 Типы ошибок показываются как "другие (16)" - непонятно какая именно ошибка
@@ -2363,7 +2363,7 @@ APIStatusBar не появляется - хорошо
 // Проверка на ошибки прокси сервера (connection refused)
 if (raw.includes("fetch failed") && !raw.includes("ENOTFOUND") && !raw.includes("ECONNRESET")) {
   console.log("❌ Proxy server connection refused");
-  
+
   const proxyErrorCards: FlashcardOld[] = [{
     front: `Прокси сервер недоступен`,
     back: `Запустите server командой 'npm run start'`,
@@ -2380,10 +2380,10 @@ if (raw.includes("fetch failed") && !raw.includes("ENOTFOUND") && !raw.includes(
 }
 
 // Проверка на сетевые ошибки (нет интернета)
-if (raw.includes("ENOTFOUND") || raw.includes("ECONNRESET") || 
+if (raw.includes("ENOTFOUND") || raw.includes("ECONNRESET") ||
     (raw.includes("fetch failed") && raw.includes("api.anthropic.com"))) {
   console.log("❌ Network error detected");
-  
+
   const networkErrorCards: FlashcardOld[] = [{
     front: `Ошибка сети`,
     back: `Проверьте подключение к интернету`,
@@ -2408,12 +2408,12 @@ const retryFailedChunks = React.useCallback(async (
   onProgress?: (current: number, total: number, chunk: string) => void
 ) => {
   console.log('🔄 Starting retry process...');
-  
+
   // Собираем УНИКАЛЬНЫЕ проблемные чанки
   const problemChunksMap = new Map<string, { cards: FlashcardNew[], chunkText: string }>();
-  
+
   flashcards.forEach(card => {
-    const isProblematic = 
+    const isProblematic =
       card.base_form?.includes('retry_needed') ||
       card.base_form?.includes('rate_limit') ||
       card.base_form?.includes('network_error') ||
@@ -2423,11 +2423,11 @@ const retryFailedChunks = React.useCallback(async (
       card.base_translation?.includes('Превышен лимит') ||
       card.base_translation?.includes('Ошибка сети') ||
       card.base_translation?.includes('Прокси сервер недоступен');
-    
+
     if (isProblematic) {
-      const chunkText = card.contexts?.[0]?.original_phrase || 
+      const chunkText = card.contexts?.[0]?.original_phrase ||
                        card.original_phrase || '';
-      
+
       if (chunkText) {
         const existing = problemChunksMap.get(chunkText) || { cards: [], chunkText };
         existing.cards.push(card);
@@ -2451,7 +2451,7 @@ const retryFailedChunks = React.useCallback(async (
 
   for (let i = 0; i < uniqueChunks.length; i++) {
     const { chunkText, cards: problemCards } = uniqueChunks[i];
-    
+
     // Прогресс callback
     if (onProgress) {
       onProgress(i + 1, uniqueChunks.length, chunkText);
@@ -2459,16 +2459,16 @@ const retryFailedChunks = React.useCallback(async (
 
     try {
       console.log(`🔄 Обработка чанка ${i + 1}/${uniqueChunks.length}: "${chunkText.substring(0, 50)}..."`);
-      
+
       // Задержка между запросами
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // Повторно обрабатываем чанк
       const newCards = await processChunkWithContext(chunkText);
-      
+
       if (newCards && newCards.length > 0) {
         // Проверяем что получили валидные карточки (не ошибки)
-        const validCards = newCards.filter(card => 
+        const validCards = newCards.filter(card =>
           !card.base_form?.includes('retry_needed') &&
           !card.base_form?.includes('rate_limit') &&
           !card.base_form?.includes('network_error') &&
@@ -2484,30 +2484,30 @@ const retryFailedChunks = React.useCallback(async (
           setFlashcards(prev => {
             // Собираем base_forms всех карточек от этого чанка
             const baseFormsToRemove = new Set<string>();
-            
+
             prev.forEach(card => {
-              const cardChunk = card.contexts?.[0]?.original_phrase || 
+              const cardChunk = card.contexts?.[0]?.original_phrase ||
                                card.original_phrase || '';
               if (cardChunk === chunkText && card.base_form) {
                 baseFormsToRemove.add(card.base_form);
               }
             });
-            
+
             console.log(`🗑️ Удаляем ${baseFormsToRemove.size} карточек от чанка`);
-            
+
             // Фильтруем карточки
-            const filteredCards = prev.filter(card => 
+            const filteredCards = prev.filter(card =>
               !baseFormsToRemove.has(card.base_form || '')
             );
-            
+
             // Добавляем новые карточки
             const result = [...filteredCards, ...mergeCardsByBaseForm(validCards)];
-            
+
             console.log(`📊 Было: ${prev.length}, удалено: ${baseFormsToRemove.size}, добавлено: ${validCards.length}, итого: ${result.length}`);
-            
+
             return result;
           });
-          
+
           successCount++;
           console.log(`✅ Успешно обработан чанк: ${validCards.length} новых карточек`);
         } else {
@@ -2542,12 +2542,12 @@ const retryFailedChunks = React.useCallback(async (
 // ========================================
 // ЗАМЕНИТЬ ВЕСЬ компонент APIStatusBar:
 
-const APIStatusBar: React.FC<APIStatusBarProps> = ({ 
-  flashcards, 
-  onRetryProcessing 
+const APIStatusBar: React.FC<APIStatusBarProps> = ({
+  flashcards,
+  onRetryProcessing
 }) => {
   const [isRetrying, setIsRetrying] = React.useState(false);
-  
+
   // Анализ ошибок с правильной классификацией
   const errorStats = React.useMemo(() => {
     const stats = {
@@ -2562,7 +2562,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
     };
 
     flashcards.forEach(card => {
-      const needsReprocessing = 
+      const needsReprocessing =
         (card as FlashcardNew & { needsReprocessing?: boolean }).needsReprocessing ||
         card.base_translation?.includes("[Translation needed:") ||
         card.phrase_translation?.includes("[Chunk translation needed:") ||
@@ -2578,29 +2578,29 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
 
       if (needsReprocessing) {
         stats.total++;
-        
+
         // Извлекаем текст чанка
-        const chunkText = card.contexts?.[0]?.original_phrase || 
+        const chunkText = card.contexts?.[0]?.original_phrase ||
                          card.original_phrase || '';
-        
+
         if (chunkText && !stats.chunks.has(chunkText)) {
           stats.chunks.add(chunkText);
           stats.chunksList.push(chunkText);
         }
 
         // Классификация по base_form и тексту
-        if (card.base_form?.includes("proxy_error") || 
+        if (card.base_form?.includes("proxy_error") ||
             card.base_translation?.includes("Прокси сервер недоступен") ||
             card.front?.includes("Прокси сервер недоступен")) {
           stats.proxy++;
-        } else if (card.base_form?.includes("network_error") || 
+        } else if (card.base_form?.includes("network_error") ||
                    card.base_translation?.includes("Ошибка сети") ||
                    card.front?.includes("Ошибка сети")) {
           stats.network++;
-        } else if (card.base_form?.includes("retry_needed") || 
+        } else if (card.base_form?.includes("retry_needed") ||
                    card.base_translation?.includes("Требуется обработка")) {
           stats.overload++;
-        } else if (card.base_form?.includes("rate_limit") || 
+        } else if (card.base_form?.includes("rate_limit") ||
                    card.base_translation?.includes("Превышен лимит")) {
           stats.rateLimit++;
         } else {
@@ -2708,7 +2708,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
             <div>Проблемных карточек: {errorStats.total}</div>
             <div>Уникальных чанков: {errorStats.chunks.size}</div>
             <div>
-              Типы ошибок: 
+              Типы ошибок:
               {errorStats.proxy > 0 && ` прокси (${errorStats.proxy})`}
               {errorStats.network > 0 && ` сеть (${errorStats.network})`}
               {errorStats.overload > 0 && ` перегрузка (${errorStats.overload})`}
@@ -2728,10 +2728,10 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
                 button.disabled = true;
                 button.textContent = '🔄 Обработка...';
                 setIsRetrying(true);
-                
+
                 try {
                   const result = await onRetryProcessing();
-                  
+
                   if (result.successful === result.total) {
                     button.textContent = '✅ Готово!';
                     setTimeout(() => {
@@ -2909,20 +2909,20 @@ https://docs.anthropic.com/en/api/creating-message-batches
 Как вариант предлагаю сделать галочку и если пользователь ставит ее то при обработке используется batch processing. (Надо подумать как и где ее лучше разместить чтобы пользователю было удобно)
 Если не ставит галочку то batch processing не используется и чанки обрабатываются как обычно один за другим.
 Я так понимаю что в случае  batch processing мы можем показывать состояние обработки пакета пользователю в том числе и дату окончания доступа к результатам обработки
-Я так понимаю что мы можем показывать пользователю "id" пакета например "msgbatch_01HkcTjaV5uDC8jWR4ZsDV8d", 
+Я так понимаю что мы можем показывать пользователю "id" пакета например "msgbatch_01HkcTjaV5uDC8jWR4ZsDV8d",
     и предложить пользователю скопировать  сохранить его на случай если процессинг будет долгим до 24  часов
     чтобы он мог потом заного запустить приложение ввести этот   "id"  от batch processing и запросить результаты проверить статус
 Или нам просто нужно где-то хранить сессии пользователя? Как лучше? Если так то может ему нужно видеть историю отправленных пакетов и их статусами?
 Как лучше?
 я так понимаю что здесь это описано как можно запрашивать его https://docs.anthropic.com/en/api/retrieving-message-batches
 Возможно что для невыполненых пакетов нужно реализовать логику повторных попыток для невыполненных запросов.
- Давай подумаем как этом все можно комплексно реализовать в нашем приложении. 
+ Давай подумаем как этом все можно комплексно реализовать в нашем приложении.
 
 еще я думаю что нам нужно реализовать промпт кеширование
 https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching и вероятно что в случае batch processing правильнее будет делать часовое кеширование
 а в случае если мы не используем  случае batch то пятиминутное кеширование.
 и кеширование вероятно лучше всего включать будет только в случае если у нес больше 4 чанков иначе как я понимаю будет невыгодно.
-Я так понимаю что в случае кеширования промпт должен быть Минимум 2048 токенов  и включать его например только в случае от 10 запросов с точки зрения выгоды. 
+Я так понимаю что в случае кеширования промпт должен быть Минимум 2048 токенов  и включать его например только в случае от 10 запросов с точки зрения выгоды.
 Изучи этот чат для понимания контекста CachingChat.txt
 Давай подумаем обо всем этом и выберем лучшую стратегию так чтобы не сильно усложнять код но при этом удешевить стоимость запросов, лучше их контролировать чтобы чанки не терялись из перевода и так чтобы увеличить скорость и дать выбор пользователю какой способ использовать.
 
@@ -3207,7 +3207,7 @@ NEXT STEPS:
 ```typescript
 enum ErrorType {
   PROXY_UNAVAILABLE = 'proxy_unavailable',
-  NETWORK_ERROR = 'network_error', 
+  NETWORK_ERROR = 'network_error',
   API_OVERLOADED = 'api_overloaded',
   RATE_LIMITED = 'rate_limited',
   UNKNOWN = 'unknown'
@@ -3454,23 +3454,23 @@ export class ApiClient extends EventEmitter {
   async request(prompt: string): Promise<string> {
     try {
       const result = await callClaude(prompt);
-      
+
       // Проверяем структурированные ошибки
       if (result.startsWith('[ERROR:')) {
         const errorInfo = JSON.parse(result.slice(7, -1));
         this.emit('error', errorInfo);
         throw errorInfo;
       }
-      
+
       this.emit('success', result);
       return result;
     } catch (error) {
       const errorInfo = analyzeError(error);
-      
+
       if (errorInfo.type === 'rate_limited') {
         this.emit('rateLimit', errorInfo);
       }
-      
+
       throw errorInfo;
     }
   }
@@ -3510,7 +3510,7 @@ export function useRetryQueue() {
       attempts: 0,
       timestamp: Date.now()
     };
-    
+
     setQueue(prev => [...prev, item]);
   }, []);
 
@@ -3633,7 +3633,7 @@ const { queue } = useRetryQueue();
 **RISK ASSESSMENT**: LOW (при поэтапном внедрении)
 **CONFIDENCE**: 95%
 **LOOP STATUS**: None
-**NEXT STEPS**: 
+**NEXT STEPS**:
 1. Решить: быстрое решение или сразу модульное?
 2. Если быстрое - начать с error-handler.ts
 3. Планировать миграцию на модульную архитектуру
@@ -3734,22 +3734,22 @@ export interface ErrorInfo {
  */
 export function analyzeError(error: any): ErrorInfo {
   const timestamp = Date.now();
-  
+
   // Извлекаем текст ошибки из разных форматов
-  const errorStr = typeof error === 'string' 
-    ? error 
+  const errorStr = typeof error === 'string'
+    ? error
     : error?.message || error?.error || JSON.stringify(error);
-  
+
   const errorLower = errorStr.toLowerCase();
-  
+
   console.log('🔍 [ErrorHandler] Analyzing error:', {
     type: typeof error,
     message: errorStr.substring(0, 200),
     timestamp: new Date(timestamp).toISOString()
   });
-  
+
   // 1. Проверка на отсутствие прокси (ECONNREFUSED)
-  if (errorLower.includes('econnrefused') || 
+  if (errorLower.includes('econnrefused') ||
       errorLower.includes('connect econnrefused') ||
       errorLower.includes('localhost:3001')) {
     return {
@@ -3761,9 +3761,9 @@ export function analyzeError(error: any): ErrorInfo {
       timestamp
     };
   }
-  
+
   // 2. Проверка на отсутствие интернета
-  if (errorLower.includes('enotfound') || 
+  if (errorLower.includes('enotfound') ||
       errorLower.includes('getaddrinfo enotfound') ||
       errorLower.includes('enetunreach') ||
       errorLower.includes('etimedout') ||
@@ -3777,13 +3777,13 @@ export function analyzeError(error: any): ErrorInfo {
       timestamp
     };
   }
-  
+
   // 3. API Overloaded (529)
   if (errorStr.includes('529') || errorLower.includes('overload')) {
     // Пытаемся извлечь retry-after
     const retryMatch = errorStr.match(/retry[- ]?after[:\s]+(\d+)/i);
     const retryAfter = retryMatch ? parseInt(retryMatch[1]) : 600; // 10 минут по умолчанию
-    
+
     return {
       type: ErrorType.API_OVERLOADED,
       message: 'Claude API временно перегружен',
@@ -3796,12 +3796,12 @@ export function analyzeError(error: any): ErrorInfo {
       timestamp
     };
   }
-  
+
   // 4. Rate Limited (429)
   if (errorStr.includes('429') || errorLower.includes('rate limit')) {
     const retryMatch = errorStr.match(/retry[- ]?after[:\s]+(\d+)/i);
     const retryAfter = retryMatch ? parseInt(retryMatch[1]) : 60;
-    
+
     return {
       type: ErrorType.RATE_LIMITED,
       message: 'Превышен лимит запросов к API',
@@ -3814,7 +3814,7 @@ export function analyzeError(error: any): ErrorInfo {
       timestamp
     };
   }
-  
+
   // 5. Структурированная ошибка от прокси
   if (error?.statusCode || error?.errorType) {
     return {
@@ -3828,7 +3828,7 @@ export function analyzeError(error: any): ErrorInfo {
       timestamp
     };
   }
-  
+
   // 6. Неизвестная ошибка
   return {
     type: ErrorType.UNKNOWN,
@@ -3848,7 +3848,7 @@ export function getRetryDelay(errorInfo: ErrorInfo, attemptNumber: number): numb
   if (errorInfo.retryAfter) {
     return errorInfo.retryAfter * 1000;
   }
-  
+
   // Базовые задержки по типам ошибок
   const baseDelays: Record<ErrorType, number> = {
     [ErrorType.API_OVERLOADED]: 10000, // 10 секунд
@@ -3857,19 +3857,19 @@ export function getRetryDelay(errorInfo: ErrorInfo, attemptNumber: number): numb
     [ErrorType.PROXY_UNAVAILABLE]: 3000, // 3 секунды
     [ErrorType.UNKNOWN]: 1000          // 1 секунда
   };
-  
+
   const baseDelay = baseDelays[errorInfo.type];
   const multiplier = errorInfo.type === ErrorType.API_OVERLOADED ? 1.5 : 2;
-  
+
   // Exponential backoff с jitter
   const exponentialDelay = Math.min(
     baseDelay * Math.pow(multiplier, attemptNumber - 1),
     60000 // максимум 1 минута
   );
-  
+
   // Добавляем jitter для предотвращения thundering herd
   const jitter = exponentialDelay * 0.1 * Math.random();
-  
+
   return Math.round(exponentialDelay + jitter);
 }
 
@@ -3882,18 +3882,18 @@ export function formatErrorForUser(errorInfo: ErrorInfo): {
   actions: string[];
 } {
   const actions: string[] = [];
-  
+
   switch (errorInfo.type) {
     case ErrorType.PROXY_UNAVAILABLE:
       actions.push('Запустите прокси сервер');
       actions.push('Проверьте порт 3001');
       break;
-      
+
     case ErrorType.NETWORK_ERROR:
       actions.push('Проверьте интернет-соединение');
       actions.push('Отключите VPN если используете');
       break;
-      
+
     case ErrorType.API_OVERLOADED:
     case ErrorType.RATE_LIMITED:
       if (errorInfo.retryAfter) {
@@ -3904,9 +3904,9 @@ export function formatErrorForUser(errorInfo: ErrorInfo): {
       }
       break;
   }
-  
+
   actions.push('Нажмите "Повторить" для новой попытки');
-  
+
   return {
     title: errorInfo.message,
     description: errorInfo.suggestion,
@@ -3930,7 +3930,7 @@ export function deserializeError(serialized: string): ErrorInfo | null {
     if (serialized.startsWith('[ERROR:') && serialized.endsWith(']')) {
       serialized = serialized.slice(7, -1);
     }
-    
+
     return JSON.parse(serialized);
   } catch {
     return null;
@@ -3941,10 +3941,10 @@ export function deserializeError(serialized: string): ErrorInfo | null {
 // client/src/services/ApiClient.ts
 
 import { EventEmitter } from 'events';
-import { 
-  analyzeError, 
-  ErrorInfo, 
-  ErrorType, 
+import {
+  analyzeError,
+  ErrorInfo,
+  ErrorType,
   getRetryDelay,
   serializeError
 } from '../utils/error-handler';
@@ -4006,10 +4006,10 @@ export class ApiClient extends EventEmitter {
   async request(prompt: string): Promise<ApiResponse> {
     const startTime = Date.now();
     const requestId = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    
+
     this.requestCount++;
     this.emit('request:start', prompt);
-    
+
     if (this.debug) {
       console.log(`🚀 [ApiClient] Starting request ${requestId}`);
     }
@@ -4019,76 +4019,76 @@ export class ApiClient extends EventEmitter {
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       attempts = attempt;
-      
+
       try {
         const response = await this.makeRequest(prompt, requestId, attempt);
-        
+
         // Проверяем на структурированную ошибку
         if (response.startsWith('[ERROR:')) {
           const errorInfo = JSON.parse(response.slice(7, -1)) as ErrorInfo;
           lastError = errorInfo;
-          
+
           // Генерируем специфичные события
           if (errorInfo.type === ErrorType.RATE_LIMITED) {
             this.emit('rate-limit', errorInfo);
           } else if (errorInfo.type === ErrorType.API_OVERLOADED) {
             this.emit('overload', errorInfo);
           }
-          
+
           // Проверяем, можно ли retry
           if (!errorInfo.retryable || attempt >= this.maxRetries) {
             throw errorInfo;
           }
-          
+
           // Вычисляем задержку
           const delay = getRetryDelay(errorInfo, attempt);
-          
+
           if (this.debug) {
             console.log(`🔄 [ApiClient] Retry ${attempt}/${this.maxRetries} after ${delay}ms`);
           }
-          
+
           this.emit('request:retry', attempt, delay, errorInfo);
-          
+
           // Ждем перед следующей попыткой
           await this.delay(delay);
           continue;
         }
-        
+
         // Успешный ответ
         const duration = Date.now() - startTime;
         this.successCount++;
-        
+
         this.emit('request:success', response, duration);
-        
+
         return {
           success: true,
           data: response,
           attempts,
           duration
         };
-        
+
       } catch (error) {
         // Анализируем ошибку
-        const errorInfo = error instanceof Object && 'type' in error 
-          ? error as ErrorInfo 
+        const errorInfo = error instanceof Object && 'type' in error
+          ? error as ErrorInfo
           : analyzeError(error);
-          
+
         lastError = errorInfo;
-        
+
         if (this.debug) {
           console.error(`❌ [ApiClient] Attempt ${attempt} failed:`, errorInfo);
         }
-        
+
         // Если это последняя попытка или ошибка не retry-able
         if (attempt >= this.maxRetries || !errorInfo.retryable) {
           break;
         }
-        
+
         // Вычисляем задержку для retry
         const delay = getRetryDelay(errorInfo, attempt);
-        
+
         this.emit('request:retry', attempt, delay, errorInfo);
-        
+
         await this.delay(delay);
       }
     }
@@ -4096,9 +4096,9 @@ export class ApiClient extends EventEmitter {
     // Все попытки исчерпаны
     const duration = Date.now() - startTime;
     this.errorCount++;
-    
+
     this.emit('request:error', lastError!);
-    
+
     return {
       success: false,
       error: lastError!,
@@ -4169,7 +4169,7 @@ export class ApiClient extends EventEmitter {
       totalRequests: this.requestCount,
       successful: this.successCount,
       failed: this.errorCount,
-      successRate: this.requestCount > 0 
+      successRate: this.requestCount > 0
         ? ((this.successCount / this.requestCount) * 100).toFixed(2) + '%'
         : 'N/A'
     };
@@ -4284,7 +4284,7 @@ export function useRetryQueue() {
     try {
       const savedQueue = localStorage.getItem(STORAGE_KEY);
       const savedStats = localStorage.getItem(STATS_KEY);
-      
+
       return {
         items: savedQueue ? JSON.parse(savedQueue) : [],
         isProcessing: false,
@@ -4390,7 +4390,7 @@ export function useRetryQueue() {
 
     const startTime = Date.now();
     const pendingItems = state.items.filter(item => item.status === 'pending');
-    
+
     if (pendingItems.length === 0) {
       console.log('✅ [RetryQueue] No items to process');
       return {
@@ -4425,8 +4425,8 @@ export function useRetryQueue() {
       setState(prev => ({
         ...prev,
         currentItemId: item.id,
-        items: prev.items.map(it => 
-          it.id === item.id 
+        items: prev.items.map(it =>
+          it.id === item.id
             ? { ...it, status: 'processing' as const, lastAttemptAt: Date.now() }
             : it
         )
@@ -4438,16 +4438,16 @@ export function useRetryQueue() {
       try {
         // Обрабатываем чанк
         const result = await processChunk(item.chunk);
-        
+
         // Проверяем результат на ошибки
         if (result && !result.error) {
           successCount++;
-          
+
           // Обновляем статус на успешный
           setState(prev => ({
             ...prev,
-            items: prev.items.map(it => 
-              it.id === item.id 
+            items: prev.items.map(it =>
+              it.id === item.id
                 ? { ...it, status: 'success' as const, attempts: it.attempts + 1 }
                 : it
             ),
@@ -4460,25 +4460,25 @@ export function useRetryQueue() {
           }));
 
           options.onItemComplete?.(item, true);
-          
+
           console.log(`✅ [RetryQueue] Successfully processed item ${item.id}`);
         } else {
           throw new Error(result?.error || 'Unknown error');
         }
-        
+
       } catch (error) {
         failureCount++;
-        
+
         console.error(`❌ [RetryQueue] Failed to process item ${item.id}:`, error);
-        
+
         // Обновляем статус на failed
         setState(prev => ({
           ...prev,
-          items: prev.items.map(it => 
-            it.id === item.id 
-              ? { 
-                  ...it, 
-                  status: 'failed' as const, 
+          items: prev.items.map(it =>
+            it.id === item.id
+              ? {
+                  ...it,
+                  status: 'failed' as const,
                   attempts: it.attempts + 1,
                   errorInfo: {
                     ...it.errorInfo,
@@ -4521,9 +4521,9 @@ export function useRetryQueue() {
     };
 
     console.log(`🏁 [RetryQueue] Processing complete:`, result);
-    
+
     options.onComplete?.(result);
-    
+
     return result;
   }, [state.isProcessing, state.items]);
 
@@ -4557,7 +4557,7 @@ export function useRetryQueue() {
   const clearQueue = useCallback((onlyProcessed = false) => {
     setState(prev => ({
       ...prev,
-      items: onlyProcessed 
+      items: onlyProcessed
         ? prev.items.filter(item => item.status === 'pending')
         : []
     }));
@@ -4569,8 +4569,8 @@ export function useRetryQueue() {
   const resetFailedItems = useCallback(() => {
     setState(prev => ({
       ...prev,
-      items: prev.items.map(item => 
-        item.status === 'failed' 
+      items: prev.items.map(item =>
+        item.status === 'failed'
           ? { ...item, status: 'pending' as const }
           : item
       )
@@ -4611,7 +4611,7 @@ export function useRetryQueue() {
     isProcessing: state.isProcessing,
     currentItemId: state.currentItemId,
     stats: state.stats,
-    
+
     // Actions
     enqueue,
     enqueueMultiple,
@@ -4620,7 +4620,7 @@ export function useRetryQueue() {
     removeItem,
     clearQueue,
     resetFailedItems,
-    
+
     // Queries
     getItemsByStatus,
     getErrorStats,
@@ -4677,13 +4677,13 @@ export async function callClaude(prompt: string): Promise<string> {
   const apiClient = getApiClient({
     debug: process.env.NODE_ENV === 'development'
   });
-  
+
   const response = await apiClient.request(prompt);
-  
+
   if (response.success && response.data) {
     return response.data;
   }
-  
+
   // Возвращаем структурированную ошибку
   return `[ERROR:${serializeError(response.error!)}]`;
 }
@@ -4718,20 +4718,20 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
   // Подписываемся на события ApiClient
   React.useEffect(() => {
     const apiClient = getApiClient();
-    
+
     const handleRateLimit = (error: ErrorInfo) => {
       console.warn('⚠️ Rate limit detected:', error);
       // Можно показать toast уведомление
     };
-    
+
     const handleOverload = (error: ErrorInfo) => {
       console.warn('⚠️ API overloaded:', error);
       // Можно показать специальное предупреждение
     };
-    
+
     apiClient.on('rate-limit', handleRateLimit);
     apiClient.on('overload', handleOverload);
-    
+
     return () => {
       apiClient.off('rate-limit', handleRateLimit);
       apiClient.off('overload', handleOverload);
@@ -4742,19 +4742,19 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
   const processChunkWithContext = React.useCallback(
     async (chunk: string): Promise<FlashcardOld[]> => {
       // ... существующий код до вызова callClaude ...
-      
+
       const raw = await callClaude(finalPrompt);
-      
+
       // Проверяем на структурированную ошибку
       if (raw.startsWith('[ERROR:')) {
         const errorInfo = deserializeError(raw);
-        
+
         if (errorInfo) {
           console.log('📦 Structured error received:', errorInfo);
-          
+
           // Добавляем в retry queue вместо создания error карточек
           enqueue(chunk, errorInfo);
-          
+
           // Возвращаем временную карточку-маркер
           const placeholderCard: FlashcardOld = {
             front: errorInfo.message,
@@ -4768,11 +4768,11 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
             needsReprocessing: true,
             errorType: errorInfo.type // Добавляем тип для APIStatusBar
           };
-          
+
           return normalizeCards([placeholderCard]);
         }
       }
-      
+
       // ... остальная логика обработки успешного ответа ...
     },
     [/* ... зависимости ... */, enqueue]
@@ -4786,29 +4786,29 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
       async (chunk: string) => {
         // Обрабатываем чанк через существующую логику
         const cards = await processChunkWithContext(chunk);
-        
+
         // Проверяем, что получили валидные карточки
-        const validCards = cards.filter(card => 
+        const validCards = cards.filter(card =>
           !card.base_form?.includes('pending_retry') &&
           !card.base_form?.includes('error')
         );
-        
+
         if (validCards.length > 0) {
           // Заменяем placeholder карточки на реальные
           setFlashcards(prev => {
             // Удаляем все карточки от этого чанка
-            const filtered = prev.filter(card => 
+            const filtered = prev.filter(card =>
               card.original_phrase !== chunk ||
               !card.base_form?.includes('pending_retry')
             );
-            
+
             // Добавляем новые карточки
             return [...filtered, ...mergeCardsByBaseForm(validCards)];
           });
-          
+
           return { success: true };
         }
-        
+
         return { error: 'No valid cards produced' };
       },
       {
@@ -4822,7 +4822,7 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
   // Возвращаем все необходимое
   return {
     // ... существующие поля ...
-    
+
     // Retry queue функционал
     retryQueue,
     isRetryProcessing,
@@ -4844,10 +4844,10 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
 import { ErrorType } from './utils/error-handler';
 
 // Обновляем APIStatusBar для работы с новой системой
-const APIStatusBar: React.FC<APIStatusBarProps> = ({ 
-  flashcards, 
+const APIStatusBar: React.FC<APIStatusBarProps> = ({
+  flashcards,
   onRetryProcessing,
-  retryQueueStats 
+  retryQueueStats
 }) => {
   const [isRetrying, setIsRetrying] = React.useState(false);
   const [retryProgress, setRetryProgress] = React.useState<{
@@ -4865,7 +4865,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
         chunks: new Set<string>() // Заполнится из flashcards если нужно
       };
     }
-    
+
     // Fallback на старую логику для обратной совместимости
     // ... существующий код подсчета ...
   }, [retryQueueStats, flashcards]);
@@ -4885,7 +4885,7 @@ const {
   processRetryQueue
 } = useProcessing(inputText, setMode);
 
-<APIStatusBar 
+<APIStatusBar
   flashcards={flashcards}
   onRetryProcessing={processRetryQueue}
   retryQueueStats={retryQueueStats}
@@ -5152,8 +5152,7 @@ client.on('rate-limit', (error) => {
 **RISK ASSESSMENT**: LOW-MEDIUM
 **CONFIDENCE**: 98%
 **LOOP STATUS**: Architecture prevents loops
-**NEXT STEPS**: 
+**NEXT STEPS**:
 1. Создать ветку в git
 2. Начать с День 1
 3. Следовать дорожной карте
-
