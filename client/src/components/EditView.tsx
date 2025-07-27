@@ -108,9 +108,9 @@ export const EditView: React.FC<EditViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {cards.map(card => {
-                const realIndex = flashcards.findIndex(originalCard => originalCard === card);
-                const isSystem =
+              {cards.map((card, idx) => {
+                const realIndex = startIndex + idx;
+                const needsReprocessing =
                   (card as { needsReprocessing?: boolean }).needsReprocessing === true;
 
                 return (
@@ -121,21 +121,21 @@ export const EditView: React.FC<EditViewProps> = ({
                   >
                     {/* VISIBLE checkbox */}
                     <td className="px-3 py-4">
-                      {!isSystem && (
-                        <input
-                          type="checkbox"
-                          checked={card.visible !== false}
-                          onChange={e => onCardUpdate(realIndex, "visible", e.target.checked)}
-                          className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
-                          data-testid="visibility-checkbox"
-                        />
-                      )}
+                      <input
+                        type="checkbox"
+                        disabled={needsReprocessing}
+                        checked={card.visible !== false}
+                        onChange={e => onCardUpdate(realIndex, "visible", e.target.checked)}
+                        className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
+                        data-testid="visibility-checkbox"
+                      />
                     </td>
 
                     {/* BASE FORM */}
                     <td className="px-3 py-4">
                       <input
                         type="text"
+                        disabled={needsReprocessing}
                         value={card.base_form || ""}
                         onChange={e => onCardUpdate(realIndex, "base_form", e.target.value)}
                         placeholder="Введите базовую форму..."
@@ -149,6 +149,7 @@ export const EditView: React.FC<EditViewProps> = ({
                     <td className="px-3 py-4">
                       <input
                         type="text"
+                        disabled={needsReprocessing}
                         value={card.base_translation || ""}
                         onChange={e => onCardUpdate(realIndex, "base_translation", e.target.value)}
                         placeholder="Введите перевод..."
@@ -160,7 +161,7 @@ export const EditView: React.FC<EditViewProps> = ({
 
                     {/* ACTIONS */}
                     <td className="px-3 py-4 text-center">
-                      {!isSystem && (
+                      {!needsReprocessing && (
                         <button
                           onClick={() => onDeleteCard(realIndex)}
                           className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"

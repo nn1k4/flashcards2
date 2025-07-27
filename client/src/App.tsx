@@ -395,6 +395,11 @@ function App() {
         console.log(`✅ Успешно обработано ${results.successful} из ${results.processed} чанков`);
       }
 
+      // После обработки всегда сбрасываем состояние просмотра
+      setCurrentIndex(0);
+      setFlipped(false);
+      setMode("flashcards");
+
       return results;
     } catch (error) {
       console.error("❌ Ошибка при retry:", error);
@@ -402,7 +407,7 @@ function App() {
     } finally {
       setRetryInProgress(false);
     }
-  }, [processRetryQueue, retryInProgress]);
+  }, [processRetryQueue, retryInProgress, setCurrentIndex, setFlipped, setMode]);
 
   const [apiError, setApiError] = React.useState(null);
 
