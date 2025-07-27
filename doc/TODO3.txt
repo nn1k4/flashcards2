@@ -1,0 +1,2793 @@
+Файл TODO2.txt, который содержит задачу, которую я пытался решить, но пока не решил.
+В конце этого файла я выработал стратегию, которой нужно придерживаться - гибридную стратегию как основу, 
+но с жёстким акцентом на модульность с Фазы 2. 
+Я хочу приступить к реализации "модульной архитектуры (Фаза 2 с элементом Фазы 1)".
+нужно:
+
+Создам пошаговый план реализации модульной архитектуры:
+```
+# 🏗️ План реализации модульной retry-архитектуры
+
+## 🎯 Стратегия: Фаза 2 с элементом Фазы 1
+
+Как согласовано в TODO2.txt, начинаем сразу с модульной архитектуры, взяв только `error-handler.ts` из Фазы 1.
+
+## 📅 Дорожная карта (3 дня)
+
+### 📋 День 1: Создание модулей (4-6 часов)
+
+#### Шаг 1.1: Создание структуры папок
+```bash
+# В папке client/src/
+mkdir -p utils services
+```
+
+Результат:
+```
+client/src/
+├── utils/
+│   └── error-handler.ts      # НОВЫЙ - централизованная обработка ошибок
+├── services/
+│   └── ApiClient.ts          # НОВЫЙ - обертка над callClaude с событиями  
+└── hooks/
+    └── useRetryQueue.ts      # НОВЫЙ - персистентная очередь retry
+```
+
+#### Шаг 1.2: Создание error-handler.ts
+**Файл**: `client/src/utils/error-handler.ts`
+
+```typescript
+// Централизованная система анализа и классификации ошибок API
+export enum ErrorType {
+  PROXY_UNAVAILABLE = 'proxy_unavailable',    // прокси недоступен  
+  NETWORK_ERROR = 'network_error',            // проблемы с интернетом
+  API_OVERLOADED = 'api_overloaded',          // API перегружен (529)
+  RATE_LIMITED = 'rate_limited',              // превышен лимит (429)
+  AUTHENTICATION = 'authentication',          // проблемы с API ключом (401, 403)
+  INSUFFICIENT_QUOTA = 'insufficient_quota',  // недостаточно средств (402)
+  UNKNOWN = 'unknown'                         // прочие ошибки
+}
+
+export interface ErrorInfo {
+  type: ErrorType;
+  code?: number;
+  message: string;
+  originalError?: any;
+  retryable: boolean;
+  userMessage: string;           // Понятное сообщение для пользователя
+  recommendation: string;        // Что делать пользователю
+  retryAfter?: number;          // Время до следующей попытки (мс)
+  severity: 'low' | 'medium' | 'high' | 'critical';
+}
+
+/**
+ * Анализирует ошибку и возвращает структурированную информацию
+ */
+export function analyzeError(error: any): ErrorInfo {
+  console.log('🔍 Анализ ошибки:', error);
+
+  // Проверка HTTP статус кода
+  if (error?.response?.status || error?.status) {
+    const status = error.response?.status || error.status;
+    return analyzeHttpError(status, error);
+  }
+
+  // Проверка network ошибок
+  if (error?.code || error?.message) {
+    return analyzeNetworkError(error);
+  }
+
+  // Fallback для неизвестных ошибок
+  return {
+    type: ErrorType.UNKNOWN,
+    message: error?.message || 'Неизвестная ошибка',
+    originalError: error,
+    retryable: true,
+    userMessage: '🔴 Произошла неизвестная ошибка',
+    recommendation: 'Попробуйте повторить запрос через несколько минут',
+    severity: 'medium'
+  };
+}
+
+function analyzeHttpError(status: number, error: any): ErrorInfo {
+  switch (status) {
+    case 429:
+      return {
+        type: ErrorType.RATE_LIMITED,
+        code: 429,
+        message: 'Rate limit exceeded',
+        originalError: error,
+        retryable: true,
+        userMessage: '🟡 Превышен лимит запросов Claude API',
+        recommendation: 'Подождите несколько минут перед повторной попыткой',
+        retryAfter: extractRetryAfter(error),
+        severity: 'medium'
+      };
+
+    case 529:
+      return {
+        type: ErrorType.API_OVERLOADED,
+        code: 529,
+        message: 'Service temporarily overloaded',
+        originalError: error,
+        retryable: true,
+        userMessage: '🔴 Claude API временно перегружен',
+        recommendation: 'Обычно перегрузка длится 10-30 минут. Попробуйте позже',
+        severity: 'high'
+      };
+
+    case 401:
+    case 403:
+      return {
+        type: ErrorType.AUTHENTICATION,
+        code: status,
+        message: 'Authentication failed',
+        originalError: error,
+        retryable: false,
+        userMessage: '🔑 Ошибка аутентификации API',
+        recommendation: 'Проверьте API ключ в настройках сервера',
+        severity: 'critical'
+      };
+
+    case 402:
+      return {
+        type: ErrorType.INSUFFICIENT_QUOTA,
+        code: 402,
+        message: 'Insufficient quota',
+        originalError: error,
+        retryable: false,
+        userMessage: '💳 Недостаточно средств на API аккаунте',
+        recommendation: 'Пополните баланс в личном кабинете Anthropic',
+        severity: 'critical'
+      };
+
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      return {
+        type: ErrorType.API_OVERLOADED,
+        code: status,
+        message: 'Server error',
+        originalError: error,
+        retryable: true,
+        userMessage: '🔴 Временная ошибка сервера Claude API',
+        recommendation: 'Повторите попытку через несколько минут',
+        severity: 'high'
+      };
+
+    default:
+      return {
+        type: ErrorType.UNKNOWN,
+        code: status,
+        message: `HTTP ${status}`,
+        originalError: error,
+        retryable: status >= 500,
+        userMessage: `🔴 Ошибка HTTP ${status}`,
+        recommendation: 'Попробуйте повторить запрос',
+        severity: 'medium'
+      };
+  }
+}
+
+function analyzeNetworkError(error: any): ErrorInfo {
+  const errorCode = error.code?.toUpperCase() || '';
+  const errorMessage = error.message?.toLowerCase() || '';
+
+  // Прокси сервер недоступен
+  if (errorCode === 'ECONNREFUSED' || errorMessage.includes('econnrefused')) {
+    return {
+      type: ErrorType.PROXY_UNAVAILABLE,
+      message: 'Connection refused to proxy',
+      originalError: error,
+      retryable: true,
+      userMessage: '🟠 Прокси сервер недоступен',
+      recommendation: 'Запустите сервер командой "npm start" в папке server',
+      severity: 'high'
+    };
+  }
+
+  // Проблемы с интернетом
+  if (errorCode.includes('ENOTFOUND') || errorCode.includes('ECONNRESET') || 
+      errorMessage.includes('network error') || errorMessage.includes('timeout')) {
+    return {
+      type: ErrorType.NETWORK_ERROR,
+      message: 'Network connectivity issues',
+      originalError: error,
+      retryable: true,
+      userMessage: '🌐 Проблемы с интернет-соединением',
+      recommendation: 'Проверьте подключение к интернету и попробуйте еще раз',
+      severity: 'medium'
+    };
+  }
+
+  // Fallback для network ошибок
+  return {
+    type: ErrorType.NETWORK_ERROR,
+    message: error.message || 'Network error',
+    originalError: error,
+    retryable: true,
+    userMessage: '🔴 Ошибка сети',
+    recommendation: 'Проверьте интернет-соединение и повторите попытку',
+    severity: 'medium'
+  };
+}
+
+function extractRetryAfter(error: any): number | undefined {
+  const retryAfter = error?.response?.headers?.['retry-after'];
+  if (retryAfter) {
+    const seconds = parseInt(retryAfter, 10);
+    if (!isNaN(seconds)) {
+      return seconds * 1000; // конвертируем в миллисекунды
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Определяет задержку для retry на основе типа ошибки
+ */
+export function getRetryDelay(errorType: ErrorType, attempt: number, retryAfter?: number): number {
+  // Если сервер указал Retry-After, используем его
+  if (retryAfter) {
+    return retryAfter;
+  }
+
+  // Конфигурация задержек по типам ошибок
+  const configs = {
+    [ErrorType.API_OVERLOADED]: { base: 10000, multiplier: 1.5 }, // начинаем с 10 сек
+    [ErrorType.RATE_LIMITED]: { base: 5000, multiplier: 2 },      // начинаем с 5 сек  
+    [ErrorType.PROXY_UNAVAILABLE]: { base: 2000, multiplier: 1.8 }, // прокси
+    [ErrorType.NETWORK_ERROR]: { base: 1000, multiplier: 2 },     // интернет
+    [ErrorType.UNKNOWN]: { base: 1000, multiplier: 2 }            // остальные
+  };
+
+  const config = configs[errorType] || configs[ErrorType.UNKNOWN];
+  const delay = config.base * Math.pow(config.multiplier, attempt - 1);
+  
+  // Максимальная задержка - 60 секунд
+  return Math.min(delay, 60000);
+}
+
+/**
+ * Проверяет, можно ли повторить запрос для данного типа ошибки
+ */
+export function isRetryable(errorType: ErrorType): boolean {
+  const nonRetryableTypes = [
+    ErrorType.AUTHENTICATION,
+    ErrorType.INSUFFICIENT_QUOTA
+  ];
+  
+  return !nonRetryableTypes.includes(errorType);
+}
+```
+
+#### Шаг 1.3: Создание ApiClient.ts  
+**Файл**: `client/src/services/ApiClient.ts`
+
+```typescript
+// Модульная обертка над callClaude с поддержкой событий и персистентного retry
+import { callClaude } from '../claude';
+import { analyzeError, ErrorInfo, getRetryDelay, isRetryable, ErrorType } from '../utils/error-handler';
+
+// Простая браузерная реализация EventEmitter для избежания зависимости от Node.js
+class SimpleEventEmitter {
+  private events: Map<string, Function[]> = new Map();
+
+  on(event: string, listener: Function): void {
+    if (!this.events.has(event)) {
+      this.events.set(event, []);
+    }
+    this.events.get(event)!.push(listener);
+  }
+
+  off(event: string, listener: Function): void {
+    const listeners = this.events.get(event);
+    if (listeners) {
+      const index = listeners.indexOf(listener);
+      if (index > -1) {
+        listeners.splice(index, 1);
+      }
+    }
+  }
+
+  emit(event: string, ...args: any[]): void {
+    const listeners = this.events.get(event);
+    if (listeners) {
+      listeners.forEach(listener => {
+        try {
+          listener(...args);
+        } catch (error) {
+          console.error(`Error in event listener for ${event}:`, error);
+        }
+      });
+    }
+  }
+
+  removeAllListeners(event?: string): void {
+    if (event) {
+      this.events.delete(event);
+    } else {
+      this.events.clear();
+    }
+  }
+}
+
+export interface ApiClientOptions {
+  maxRetries?: number;
+  debug?: boolean;
+  enableEvents?: boolean;
+}
+
+export interface ApiClientStats {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  retriesPerformed: number;
+  lastRequestTime: number;
+  errorsByType: Record<string, number>;
+}
+
+export class ApiClient extends SimpleEventEmitter {
+  private options: Required<ApiClientOptions>;
+  private stats: ApiClientStats;
+
+  constructor(options: ApiClientOptions = {}) {
+    super();
+    
+    this.options = {
+      maxRetries: 5,
+      debug: false,
+      enableEvents: true,
+      ...options
+    };
+
+    this.stats = {
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      retriesPerformed: 0,
+      lastRequestTime: 0,
+      errorsByType: {}
+    };
+
+    if (this.options.debug) {
+      console.log('🚀 ApiClient инициализирован с настройками:', this.options);
+    }
+  }
+
+  /**
+   * Основной метод для отправки запроса с автоматическим retry
+   */
+  async request(prompt: string, options: { chunkInfo?: string } = {}): Promise<string> {
+    this.stats.totalRequests++;
+    this.stats.lastRequestTime = Date.now();
+
+    if (this.options.debug) {
+      console.log(`📤 ApiClient: Отправка запроса (попытка 1/${this.options.maxRetries})`);
+    }
+
+    for (let attempt = 1; attempt <= this.options.maxRetries; attempt++) {
+      try {
+        // Отправляем событие о начале запроса
+        if (this.options.enableEvents) {
+          this.emit('requestStart', { 
+            attempt, 
+            maxRetries: this.options.maxRetries, 
+            chunkInfo: options.chunkInfo 
+          });
+        }
+
+        const result = await callClaude(prompt);
+        
+        // Проверяем на структурированные ошибки в ответе
+        if (result.startsWith('[ERROR:')) {
+          const errorData = JSON.parse(result.slice(7, -1));
+          throw errorData;
+        }
+
+        // Успешный результат
+        this.stats.successfulRequests++;
+        
+        if (this.options.enableEvents) {
+          this.emit('requestSuccess', { 
+            attempt, 
+            result: result.substring(0, 100) + '...', 
+            chunkInfo: options.chunkInfo 
+          });
+        }
+
+        if (this.options.debug) {
+          console.log(`✅ ApiClient: Успешный запрос за ${attempt} попыток`);
+        }
+
+        return result;
+
+      } catch (error) {
+        const errorInfo = analyzeError(error);
+        
+        // Обновляем статистику
+        this.stats.errorsByType[errorInfo.type] = (this.stats.errorsByType[errorInfo.type] || 0) + 1;
+
+        if (this.options.debug) {
+          console.log(`❌ ApiClient: Ошибка на попытке ${attempt}:`, errorInfo.userMessage);
+        }
+
+        // Отправляем событие об ошибке
+        if (this.options.enableEvents) {
+          this.emit('requestError', { 
+            attempt, 
+            maxRetries: this.options.maxRetries,
+            errorInfo, 
+            chunkInfo: options.chunkInfo,
+            willRetry: attempt < this.options.maxRetries && isRetryable(errorInfo.type)
+          });
+
+          // Специальные события для разных типов ошибок  
+          if (errorInfo.type === ErrorType.RATE_LIMITED) {
+            this.emit('rateLimited', errorInfo);
+          } else if (errorInfo.type === ErrorType.API_OVERLOADED) {
+            this.emit('apiOverloaded', errorInfo);
+          }
+        }
+
+        // Проверяем, можно ли повторить запрос
+        if (attempt >= this.options.maxRetries || !isRetryable(errorInfo.type)) {
+          this.stats.failedRequests++;
+          
+          if (this.options.enableEvents) {
+            this.emit('requestFailed', { 
+              finalAttempt: attempt, 
+              errorInfo, 
+              chunkInfo: options.chunkInfo 
+            });
+          }
+
+          throw errorInfo;
+        }
+
+        // Рассчитываем задержку и ждем
+        const delay = getRetryDelay(errorInfo.type, attempt, errorInfo.retryAfter);
+        
+        if (this.options.debug) {
+          console.log(`⏳ ApiClient: Ожидание ${delay}ms перед попыткой ${attempt + 1}`);
+        }
+
+        if (this.options.enableEvents) {
+          this.emit('retryDelay', { 
+            attempt: attempt + 1, 
+            delay, 
+            errorType: errorInfo.type,
+            chunkInfo: options.chunkInfo 
+          });
+        }
+
+        this.stats.retriesPerformed++;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    // Этот код не должен выполняться
+    throw new Error('Unexpected end of retry loop');
+  }
+
+  /**
+   * Получение статистики работы клиента
+   */
+  getStats(): ApiClientStats {
+    return { ...this.stats };
+  }
+
+  /**
+   * Сброс статистики
+   */
+  resetStats(): void {
+    this.stats = {
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      retriesPerformed: 0,
+      lastRequestTime: 0,
+      errorsByType: {}
+    };
+
+    if (this.options.debug) {
+      console.log('📊 ApiClient: Статистика сброшена');
+    }
+  }
+
+  /**
+   * Проверка работоспособности API
+   */
+  async healthCheck(): Promise<{ status: 'ok' | 'error'; message: string }> {
+    try {
+      await this.request('Test connection', { chunkInfo: 'health-check' });
+      return { status: 'ok', message: 'API доступен' };
+    } catch (error) {
+      const errorInfo = error as ErrorInfo;
+      return { 
+        status: 'error', 
+        message: errorInfo.userMessage 
+      };
+    }
+  }
+}
+
+// Глобальный экземпляр клиента для использования в приложении
+export const apiClient = new ApiClient({
+  debug: process.env.NODE_ENV === 'development',
+  enableEvents: true
+});
+```
+
+#### Шаг 1.4: Создание useRetryQueue.ts
+**Файл**: `client/src/hooks/useRetryQueue.ts`
+
+```typescript
+// Хук для управления персистентной очередью retry с событиями и localStorage
+import { useState, useCallback, useEffect } from 'react';
+import { ErrorInfo } from '../utils/error-handler';
+import { apiClient } from '../services/ApiClient';
+
+export interface QueueItem {
+  id: string;
+  chunk: string;
+  errorInfo: ErrorInfo;
+  attempts: number;
+  timestamp: number;
+  chunkInfo?: string;
+  lastAttemptTime?: number;
+}
+
+export interface RetryQueueStats {
+  totalItems: number;
+  processing: boolean;
+  processed: number;
+  failed: number;
+  lastProcessTime?: number;
+}
+
+export interface UseRetryQueueReturn {
+  queue: QueueItem[];
+  stats: RetryQueueStats;
+  enqueue: (chunk: string, errorInfo: ErrorInfo, chunkInfo?: string) => void;
+  processQueue: (onProgress?: (current: number, total: number) => void) => Promise<{
+    processed: number;
+    successful: number;
+    failed: number;
+  }>;
+  removeFromQueue: (id: string) => void;
+  clearQueue: () => void;
+  isProcessing: boolean;
+}
+
+const STORAGE_KEY = 'latvian-app-retry-queue';
+const MAX_QUEUE_SIZE = 50; // Ограничиваем размер очереди
+
+export function useRetryQueue(): UseRetryQueueReturn {
+  const [queue, setQueue] = useState<QueueItem[]>(() => {
+    // Восстанавливаем очередь из localStorage при инициализации
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        console.log(`🔄 Восстановлена очередь retry: ${parsed.length} элементов`);
+        return parsed;
+      }
+    } catch (error) {
+      console.warn('⚠️ Ошибка при восстановлении очереди из localStorage:', error);
+    }
+    return [];
+  });
+
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [stats, setStats] = useState<RetryQueueStats>({
+    totalItems: 0,
+    processing: false,
+    processed: 0,
+    failed: 0
+  });
+
+  // Сохраняем очередь в localStorage при изменении
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
+      
+      // Обновляем статистику
+      setStats(prev => ({
+        ...prev,
+        totalItems: queue.length
+      }));
+      
+      console.log(`💾 Очередь сохранена: ${queue.length} элементов`);
+    } catch (error) {
+      console.warn('⚠️ Ошибка при сохранении очереди в localStorage:', error);
+    }
+  }, [queue]);
+
+  /**
+   * Добавление элемента в очередь
+   */
+  const enqueue = useCallback((chunk: string, errorInfo: ErrorInfo, chunkInfo?: string) => {
+    const item: QueueItem = {
+      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      chunk,
+      errorInfo,
+      attempts: 0,
+      timestamp: Date.now(),
+      chunkInfo
+    };
+
+    setQueue(prevQueue => {
+      // Проверяем, нет ли уже такого чанка в очереди (избегаем дубликатов)
+      const existingIndex = prevQueue.findIndex(
+        existingItem => existingItem.chunk === chunk
+      );
+
+      if (existingIndex !== -1) {
+        // Обновляем существующий элемент
+        const updatedQueue = [...prevQueue];
+        updatedQueue[existingIndex] = {
+          ...updatedQueue[existingIndex],
+          errorInfo,
+          timestamp: Date.now(),
+          chunkInfo
+        };
+        console.log(`🔄 Обновлен элемент очереди: ${item.id}`);
+        return updatedQueue;
+      }
+
+      // Добавляем новый элемент
+      const newQueue = [...prevQueue, item];
+      
+      // Ограничиваем размер очереди
+      if (newQueue.length > MAX_QUEUE_SIZE) {
+        console.warn(`⚠️ Очередь превысила максимальный размер. Удаляются старые элементы.`);
+        return newQueue.slice(-MAX_QUEUE_SIZE);
+      }
+
+      console.log(`➕ Добавлен в очередь retry: ${item.id} (${errorInfo.userMessage})`);
+      return newQueue;
+    });
+  }, []);
+
+  /**
+   * Обработка всей очереди
+   */
+  const processQueue = useCallback(async (
+    onProgress?: (current: number, total: number) => void
+  ): Promise<{ processed: number; successful: number; failed: number }> => {
+    
+    if (isProcessing) {
+      console.warn('⚠️ Обработка очереди уже выполняется');
+      return { processed: 0, successful: 0, failed: 0 };
+    }
+
+    if (queue.length === 0) {
+      console.log('ℹ️ Очередь retry пуста');
+      return { processed: 0, successful: 0, failed: 0 };
+    }
+
+    setIsProcessing(true);
+    setStats(prev => ({ ...prev, processing: true, processed: 0, failed: 0 }));
+
+    console.log(`🚀 Начинаем обработку очереди: ${queue.length} элементов`);
+
+    const results = {
+      processed: 0,
+      successful: 0,
+      failed: 0
+    };
+
+    const queueCopy = [...queue];
+    const successfulIds: string[] = [];
+
+    for (let i = 0; i < queueCopy.length; i++) {
+      const item = queueCopy[i];
+      
+      try {
+        // Обновляем прогресс
+        onProgress?.(i + 1, queueCopy.length);
+        
+        setStats(prev => ({
+          ...prev,
+          processed: i + 1
+        }));
+
+        console.log(`🔄 Обработка элемента ${i + 1}/${queueCopy.length}: ${item.id}`);
+
+        // Обновляем количество попыток
+        item.attempts++;
+        item.lastAttemptTime = Date.now();
+
+        // Отправляем запрос через ApiClient
+        const result = await apiClient.request(item.chunk, { 
+          chunkInfo: item.chunkInfo || `retry-queue-item-${i + 1}` 
+        });
+
+        console.log(`✅ Успешно обработан: ${item.id}`);
+        
+        successfulIds.push(item.id);
+        results.successful++;
+
+      } catch (error) {
+        console.log(`❌ Ошибка при обработке ${item.id}:`, error);
+        results.failed++;
+        
+        // Обновляем информацию об ошибке в элементе очереди
+        if (error && typeof error === 'object') {
+          item.errorInfo = error as ErrorInfo;
+        }
+      }
+
+      results.processed++;
+    }
+
+    // Удаляем успешно обработанные элементы из очереди
+    if (successfulIds.length > 0) {
+      setQueue(prevQueue => 
+        prevQueue.filter(item => !successfulIds.includes(item.id))
+      );
+      console.log(`🧹 Удалено из очереди ${successfulIds.length} успешно обработанных элементов`);
+    }
+
+    setIsProcessing(false);
+    setStats(prev => ({ 
+      ...prev, 
+      processing: false, 
+      lastProcessTime: Date.now() 
+    }));
+
+    console.log(`🏁 Обработка очереди завершена:`, results);
+    return results;
+  }, [queue, isProcessing]);
+
+  /**
+   * Удаление элемента из очереди
+   */
+  const removeFromQueue = useCallback((id: string) => {
+    setQueue(prevQueue => {
+      const filtered = prevQueue.filter(item => item.id !== id);
+      console.log(`🗑️ Удален из очереди: ${id}`);
+      return filtered;
+    });
+  }, []);
+
+  /**
+   * Очистка всей очереди
+   */
+  const clearQueue = useCallback(() => {
+    setQueue([]);
+    setStats(prev => ({
+      ...prev,
+      totalItems: 0,
+      processed: 0,
+      failed: 0
+    }));
+    console.log('🧹 Очередь retry очищена');
+  }, []);
+
+  return {
+    queue,
+    stats,
+    enqueue,
+    processQueue,
+    removeFromQueue,
+    clearQueue,
+    isProcessing
+  };
+}
+```
+
+### 📋 День 2: Интеграция модулей (6-8 часов)
+
+#### Шаг 2.1: Обновление useProcessing.ts
+Найти в `client/src/hooks/useProcessing.ts` и добавить интеграцию с retry queue.
+
+**В импорты добавить:**
+```typescript
+import { useRetryQueue } from './useRetryQueue';
+import { analyzeError, ErrorType } from '../utils/error-handler';
+import { apiClient } from '../services/ApiClient';
+```
+
+**В функцию useProcessing добавить:**
+```typescript
+const retryQueue = useRetryQueue();
+
+// Обработчик событий ApiClient
+useEffect(() => {
+  const handleRequestError = (eventData: any) => {
+    const { errorInfo, chunkInfo, willRetry } = eventData;
+    
+    // Если не будет автоматического retry, добавляем в очередь
+    if (!willRetry && errorInfo.retryable) {
+      console.log('➕ Добавляем в retry queue из-за исчерпания попыток');
+      // НЕ создаем карточки ошибок - добавляем в очередь  
+      retryQueue.enqueue(chunkInfo?.originalChunk || '', errorInfo, chunkInfo);
+    }
+  };
+
+  apiClient.on('requestError', handleRequestError);
+  
+  return () => {
+    apiClient.off('requestError', handleRequestError);
+  };
+}, [retryQueue.enqueue]);
+
+// Функция обработки retry queue
+const processRetryQueue = useCallback(async (
+  onProgress?: (current: number, total: number) => void
+) => {
+  return await retryQueue.processQueue(onProgress);
+}, [retryQueue.processQueue]);
+```
+
+**Вернуть в return объекте:**
+```typescript
+return {
+  // ... существующие возвраты
+  processRetryQueue,
+  retryQueue: {
+    queue: retryQueue.queue,
+    stats: retryQueue.stats,
+    isProcessing: retryQueue.isProcessing,
+    clearQueue: retryQueue.clearQueue
+  }
+};
+```
+
+#### Шаг 2.2: Обновление APIStatusBar в App.tsx  
+Найти компонент APIStatusBar в `client/src/App.tsx` и обновить его для работы с retry queue.
+
+**Обновленный APIStatusBar:**
+```typescript
+interface APIStatusBarProps {
+  flashcards: FlashcardNew[];
+  retryQueue?: {
+    queue: any[];
+    stats: any;
+    isProcessing: boolean;
+  };
+  onRetryProcessing?: () => Promise<any>;
+}
+
+const APIStatusBar: React.FC<APIStatusBarProps> = ({ 
+  flashcards, 
+  retryQueue, 
+  onRetryProcessing 
+}) => {
+  // Анализ карточек с ошибками (оставляем для обратной совместимости)
+  const cardsNeedingReprocessing = flashcards.filter(card =>
+    (card as any).needsReprocessing === true
+  );
+
+  // Приоритет отдаем retry queue
+  const totalProblems = retryQueue ? retryQueue.queue.length : cardsNeedingReprocessing.length;
+  
+  if (totalProblems === 0) {
+    return null; // Не показываем, если нет проблем
+  }
+
+  // Определяем тип проблем из retry queue
+  const problemTypes = retryQueue ? 
+    retryQueue.queue.map(item => item.errorInfo?.type).filter(Boolean) :
+    [];
+
+  const hasApiOverload = problemTypes.includes('api_overloaded');
+  const hasRateLimit = problemTypes.includes('rate_limited');
+  const hasNetworkErrors = problemTypes.includes('network_error') || problemTypes.includes('proxy_unavailable');
+
+  const getMessage = () => {
+    if (hasApiOverload) return '🔴 Claude API временно перегружен';
+    if (hasRateLimit) return '🟡 Превышен лимит запросов';  
+    if (hasNetworkErrors) return '🌐 Проблемы с соединением';
+    return `🔄 ${totalProblems} чанков требуют повторной обработки`;
+  };
+
+  const getRecommendation = () => {
+    if (hasApiOverload) return 'Обычно перегрузка длится 10-30 минут';
+    if (hasRateLimit) return 'Подождите несколько минут перед повторной попыткой';
+    if (hasNetworkErrors) return 'Проверьте интернет-соединение и запуск сервера';
+    return 'Нажмите "Повторить" для обработки проблемных чанков';
+  };
+
+  return (
+    <div style={{ 
+      background: 'rgba(255,255,255,0.1)', 
+      padding: '12px', 
+      borderRadius: '8px', 
+      margin: '10px 0' 
+    }}>
+      <div style={{ marginBottom: '8px' }}>
+        <strong>{getMessage()}</strong>
+        {retryQueue?.isProcessing && (
+          <span style={{ marginLeft: '10px', color: '#4CAF50' }}>
+            🔄 Обработка...
+          </span>
+        )}
+      </div>
+      
+      <div style={{ fontSize: '14px', opacity: 0.8, marginBottom: '10px' }}>
+        {getRecommendation()}
+      </div>
+
+      {retryQueue && retryQueue.queue.length > 0 && (
+        <div style={{ fontSize: '12px', marginBottom: '10px' }}>
+          <strong>Проблемные чанки:</strong>
+          {retryQueue.queue.slice(0, 3).map((item, index) => (
+            <div key={item.id} style={{ marginLeft: '10px', opacity: 0.7 }}>
+              • {item.chunk.substring(0, 50)}...
+            </div>
+          ))}
+          {retryQueue.queue.length > 3 && (
+            <div style={{ marginLeft: '10px', opacity: 0.5 }}>
+              ... и еще {retryQueue.queue.length - 3}
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        onClick={onRetryProcessing}
+        disabled={retryQueue?.isProcessing}
+        style={{
+          background: retryQueue?.isProcessing ? '#666' : '#4CAF50',
+          color: 'white',
+          border: 'none',
+          padding: '8px 16px',
+          borderRadius: '4px',
+          cursor: retryQueue?.isProcessing ? 'not-allowed' : 'pointer'
+        }}
+      >
+        {retryQueue?.isProcessing ? 'Обработка...' : 'Повторить обработку'}
+      </button>
+    </div>
+  );
+};
+```
+
+#### Шаг 2.3: Обновление App.tsx для передачи props
+В основном компоненте App добавить:
+
+```typescript
+// В деструктуризации useProcessing:
+const {
+  // ... существующие
+  processRetryQueue,
+  retryQueue
+} = useProcessing(inputText, setMode);
+
+// Обработчик retry
+const [retryInProgress, setRetryInProgress] = React.useState(false);
+
+const handleRetryProcessing = React.useCallback(async () => {
+  if (retryInProgress || !processRetryQueue) return;
+  
+  setRetryInProgress(true);
+  try {
+    const results = await processRetryQueue((current, total) => {
+      console.log(`Обработка: ${current}/${total}`);
+    });
+    console.log('Результаты retry:', results);
+  } catch (error) {
+    console.error('Ошибка при retry:', error);
+  } finally {
+    setRetryInProgress(false);
+  }
+}, [processRetryQueue, retryInProgress]);
+
+// В JSX обновить APIStatusBar:
+<APIStatusBar 
+  flashcards={flashcards}
+  retryQueue={retryQueue}
+  onRetryProcessing={handleRetryProcessing}
+/>
+```
+
+### 📋 День 3: Отладка и оптимизация (4-6 часов)
+
+#### Шаг 3.1: Тестирование интеграции
+1. **Запуск проекта**: `npm run dev` в client, `npm start` в server  
+2. **Тест без прокси**: Остановить сервер, попробовать обработку текста
+3. **Тест с возвратом прокси**: Запустить сервер, проверить retry queue
+4. **Тест персистентности**: Перезагрузить страницу, убедиться что очередь сохранилась
+
+#### Шаг 3.2: Отладка проблем  
+- Проверить console.log в браузере на наличие ошибок
+- Убедиться что все импорты работают корректно
+- Проверить TypeScript компиляцию
+
+#### Шаг 3.3: Оптимизация
+- Настройка логирования (отключение в production)
+- Оптимизация размера localStorage
+- Добавление fallback механизмов
+
+## ✅ Критерии готовности
+
+После внедрения у вас будет:
+
+1. **✅ Модульная архитектура**: Каждый компонент имеет четкую ответственность
+2. **✅ Персистентность**: Очередь retry сохраняется при перезагрузке
+3. **✅ События**: ApiClient генерирует события для мониторинга  
+4. **✅ Понятные ошибки**: Пользователь видит человечные сообщения
+5. **✅ Готовность к batch**: Архитектура готова к расширению
+
+## 🚀 Следующие шаги (Фаза 3)
+
+Система будет готова к добавлению:
+- Batch processing для больших текстов
+- Prompt caching для оптимизации
+- Расширенная аналитика и мониторинг
+- A/B тестирование стратегий retry
+
+## ⚠️ Важные заметки
+
+1. **Обратная совместимость**: Старый код продолжит работать
+2. **Постепенное внедрение**: Можете тестировать каждый модуль отдельно  
+3. **Откат**: В любой момент можете вернуться к предыдущей версии
+4. **Расширяемость**: Легко добавлять новые типы ошибок и стратегии
+```
+Я создал подробный план реализации модульной архитектуры retry-системы. План включает:
+
+3 основных модуля:
+
+error-handler.ts - централизованная система анализа ошибок
+ApiClient.ts - модульная обертка над callClaude с событиями
+useRetryQueue.ts - хук для управления персистентной очередью
+
+
+3-дневный план внедрения:
+
+День 1: Создание модулей
+День 2: Интеграция с существующим кодом
+День 3: Отладка и оптимизация
+
+
+Пошаговые инструкции с конкретными файлами, строками кода и местами вставки
+
+Шаг 1.2: Создание первого модуля - error-handler.ts
+Создайте файл client/src/utils/error-handler.ts и скопируйте туда код:
+```
+// Централизованная система анализа и классификации ошибок API
+export enum ErrorType {
+  PROXY_UNAVAILABLE = "proxy_unavailable", // прокси недоступен
+  NETWORK_ERROR = "network_error", // проблемы с интернетом
+  API_OVERLOADED = "api_overloaded", // API перегружен (529)
+  RATE_LIMITED = "rate_limited", // превышен лимит (429)
+  AUTHENTICATION = "authentication", // проблемы с API ключом (401, 403)
+  INSUFFICIENT_QUOTA = "insufficient_quota", // недостаточно средств (402)
+  UNKNOWN = "unknown", // прочие ошибки
+}
+
+export interface ErrorInfo {
+  type: ErrorType;
+  code?: number;
+  message: string;
+  originalError?: any;
+  retryable: boolean;
+  userMessage: string; // Понятное сообщение для пользователя
+  recommendation: string; // Что делать пользователю
+  retryAfter?: number; // Время до следующей попытки (мс)
+  severity: "low" | "medium" | "high" | "critical";
+}
+
+/**
+ * Анализирует ошибку и возвращает структурированную информацию
+ */
+export function analyzeError(error: any): ErrorInfo {
+  console.log("🔍 Анализ ошибки:", error);
+
+  // Проверка HTTP статус кода
+  if (error?.response?.status || error?.status) {
+    const status = error.response?.status || error.status;
+    return analyzeHttpError(status, error);
+  }
+
+  // Проверка network ошибок
+  if (error?.code || error?.message) {
+    return analyzeNetworkError(error);
+  }
+
+  // Fallback для неизвестных ошибок
+  return {
+    type: ErrorType.UNKNOWN,
+    message: error?.message || "Неизвестная ошибка",
+    originalError: error,
+    retryable: true,
+    userMessage: "🔴 Произошла неизвестная ошибка",
+    recommendation: "Попробуйте повторить запрос через несколько минут",
+    severity: "medium",
+  };
+}
+
+function analyzeHttpError(status: number, error: any): ErrorInfo {
+  switch (status) {
+    case 429:
+      return {
+        type: ErrorType.RATE_LIMITED,
+        code: 429,
+        message: "Rate limit exceeded",
+        originalError: error,
+        retryable: true,
+        userMessage: "🟡 Превышен лимит запросов Claude API",
+        recommendation: "Подождите несколько минут перед повторной попыткой",
+        retryAfter: extractRetryAfter(error),
+        severity: "medium",
+      };
+
+    case 529:
+      return {
+        type: ErrorType.API_OVERLOADED,
+        code: 529,
+        message: "Service temporarily overloaded",
+        originalError: error,
+        retryable: true,
+        userMessage: "🔴 Claude API временно перегружен",
+        recommendation: "Обычно перегрузка длится 10-30 минут. Попробуйте позже",
+        severity: "high",
+      };
+
+    case 401:
+    case 403:
+      return {
+        type: ErrorType.AUTHENTICATION,
+        code: status,
+        message: "Authentication failed",
+        originalError: error,
+        retryable: false,
+        userMessage: "🔑 Ошибка аутентификации API",
+        recommendation: "Проверьте API ключ в настройках сервера",
+        severity: "critical",
+      };
+
+    case 402:
+      return {
+        type: ErrorType.INSUFFICIENT_QUOTA,
+        code: 402,
+        message: "Insufficient quota",
+        originalError: error,
+        retryable: false,
+        userMessage: "💳 Недостаточно средств на API аккаунте",
+        recommendation: "Пополните баланс в личном кабинете Anthropic",
+        severity: "critical",
+      };
+
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      return {
+        type: ErrorType.API_OVERLOADED,
+        code: status,
+        message: "Server error",
+        originalError: error,
+        retryable: true,
+        userMessage: "🔴 Временная ошибка сервера Claude API",
+        recommendation: "Повторите попытку через несколько минут",
+        severity: "high",
+      };
+
+    default:
+      return {
+        type: ErrorType.UNKNOWN,
+        code: status,
+        message: `HTTP ${status}`,
+        originalError: error,
+        retryable: status >= 500,
+        userMessage: `🔴 Ошибка HTTP ${status}`,
+        recommendation: "Попробуйте повторить запрос",
+        severity: "medium",
+      };
+  }
+}
+
+function analyzeNetworkError(error: any): ErrorInfo {
+  const errorCode = error.code?.toUpperCase() || "";
+  const errorMessage = error.message?.toLowerCase() || "";
+
+  // Прокси сервер недоступен
+  if (errorCode === "ECONNREFUSED" || errorMessage.includes("econnrefused")) {
+    return {
+      type: ErrorType.PROXY_UNAVAILABLE,
+      message: "Connection refused to proxy",
+      originalError: error,
+      retryable: true,
+      userMessage: "🟠 Прокси сервер недоступен",
+      recommendation: 'Запустите сервер командой "npm start" в папке server',
+      severity: "high",
+    };
+  }
+
+  // Проблемы с интернетом
+  if (
+    errorCode.includes("ENOTFOUND") ||
+    errorCode.includes("ECONNRESET") ||
+    errorMessage.includes("network error") ||
+    errorMessage.includes("timeout")
+  ) {
+    return {
+      type: ErrorType.NETWORK_ERROR,
+      message: "Network connectivity issues",
+      originalError: error,
+      retryable: true,
+      userMessage: "🌐 Проблемы с интернет-соединением",
+      recommendation: "Проверьте подключение к интернету и попробуйте еще раз",
+      severity: "medium",
+    };
+  }
+
+  // Fallback для network ошибок
+  return {
+    type: ErrorType.NETWORK_ERROR,
+    message: error.message || "Network error",
+    originalError: error,
+    retryable: true,
+    userMessage: "🔴 Ошибка сети",
+    recommendation: "Проверьте интернет-соединение и повторите попытку",
+    severity: "medium",
+  };
+}
+
+function extractRetryAfter(error: any): number | undefined {
+  const retryAfter = error?.response?.headers?.["retry-after"];
+  if (retryAfter) {
+    const seconds = parseInt(retryAfter, 10);
+    if (!isNaN(seconds)) {
+      return seconds * 1000; // конвертируем в миллисекунды
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Определяет задержку для retry на основе типа ошибки
+ */
+export function getRetryDelay(errorType: ErrorType, attempt: number, retryAfter?: number): number {
+  // Если сервер указал Retry-After, используем его
+  if (retryAfter) {
+    return retryAfter;
+  }
+
+  // Конфигурация задержек по типам ошибок
+  const configs = {
+    [ErrorType.API_OVERLOADED]: { base: 10000, multiplier: 1.5 }, // начинаем с 10 сек
+    [ErrorType.RATE_LIMITED]: { base: 5000, multiplier: 2 }, // начинаем с 5 сек
+    [ErrorType.PROXY_UNAVAILABLE]: { base: 2000, multiplier: 1.8 }, // прокси
+    [ErrorType.NETWORK_ERROR]: { base: 1000, multiplier: 2 }, // интернет
+    [ErrorType.UNKNOWN]: { base: 1000, multiplier: 2 }, // остальные
+  };
+
+  const config = configs[errorType] || configs[ErrorType.UNKNOWN];
+  const delay = config.base * Math.pow(config.multiplier, attempt - 1);
+
+  // Максимальная задержка - 60 секунд
+  return Math.min(delay, 60000);
+}
+
+/**
+ * Проверяет, можно ли повторить запрос для данного типа ошибки
+ */
+export function isRetryable(errorType: ErrorType): boolean {
+  const nonRetryableTypes = [ErrorType.AUTHENTICATION, ErrorType.INSUFFICIENT_QUOTA];
+
+  return !nonRetryableTypes.includes(errorType);
+}
+
+```
+
+ПРОГРЕСС: День 1, Шаг 1.2 завершен
+СЛЕДУЮЩИЙ ШАГ: Создание services/ApiClient.ts
+Шаг 1.3: Создание ApiClient.ts
+📝 Создание модуля ApiClient
+Создайте файл client/src/services/ApiClient.ts и скопируйте туда код:
+```
+// Модульная обертка над callClaude с поддержкой событий и персистентного retry
+import { callClaude } from "../claude";
+import {
+  analyzeError,
+  ErrorInfo,
+  getRetryDelay,
+  isRetryable,
+  ErrorType,
+} from "../utils/error-handler";
+
+// Простая браузерная реализация EventEmitter для избежания зависимости от Node.js
+class SimpleEventEmitter {
+  private events: Map<string, Function[]> = new Map();
+
+  on(event: string, listener: Function): void {
+    if (!this.events.has(event)) {
+      this.events.set(event, []);
+    }
+    this.events.get(event)!.push(listener);
+  }
+
+  off(event: string, listener: Function): void {
+    const listeners = this.events.get(event);
+    if (listeners) {
+      const index = listeners.indexOf(listener);
+      if (index > -1) {
+        listeners.splice(index, 1);
+      }
+    }
+  }
+
+  emit(event: string, ...args: any[]): void {
+    const listeners = this.events.get(event);
+    if (listeners) {
+      listeners.forEach(listener => {
+        try {
+          listener(...args);
+        } catch (error) {
+          console.error(`Error in event listener for ${event}:`, error);
+        }
+      });
+    }
+  }
+
+  removeAllListeners(event?: string): void {
+    if (event) {
+      this.events.delete(event);
+    } else {
+      this.events.clear();
+    }
+  }
+}
+
+export interface ApiClientOptions {
+  maxRetries?: number;
+  debug?: boolean;
+  enableEvents?: boolean;
+}
+
+export interface ApiClientStats {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  retriesPerformed: number;
+  lastRequestTime: number;
+  errorsByType: Record<string, number>;
+}
+
+export class ApiClient extends SimpleEventEmitter {
+  private options: Required<ApiClientOptions>;
+  private stats: ApiClientStats;
+
+  constructor(options: ApiClientOptions = {}) {
+    super();
+
+    this.options = {
+      maxRetries: 5,
+      debug: false,
+      enableEvents: true,
+      ...options,
+    };
+
+    this.stats = {
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      retriesPerformed: 0,
+      lastRequestTime: 0,
+      errorsByType: {},
+    };
+
+    if (this.options.debug) {
+      console.log("🚀 ApiClient инициализирован с настройками:", this.options);
+    }
+  }
+
+  /**
+   * Основной метод для отправки запроса с автоматическим retry
+   */
+  async request(prompt: string, options: { chunkInfo?: string } = {}): Promise<string> {
+    this.stats.totalRequests++;
+    this.stats.lastRequestTime = Date.now();
+
+    if (this.options.debug) {
+      console.log(`📤 ApiClient: Отправка запроса (попытка 1/${this.options.maxRetries})`);
+    }
+
+    for (let attempt = 1; attempt <= this.options.maxRetries; attempt++) {
+      try {
+        // Отправляем событие о начале запроса
+        if (this.options.enableEvents) {
+          this.emit("requestStart", {
+            attempt,
+            maxRetries: this.options.maxRetries,
+            chunkInfo: options.chunkInfo,
+          });
+        }
+
+        const result = await callClaude(prompt);
+
+        // Проверяем на структурированные ошибки в ответе
+        if (result.startsWith("[ERROR:")) {
+          const errorData = JSON.parse(result.slice(7, -1));
+          throw errorData;
+        }
+
+        // Успешный результат
+        this.stats.successfulRequests++;
+
+        if (this.options.enableEvents) {
+          this.emit("requestSuccess", {
+            attempt,
+            result: result.substring(0, 100) + "...",
+            chunkInfo: options.chunkInfo,
+          });
+        }
+
+        if (this.options.debug) {
+          console.log(`✅ ApiClient: Успешный запрос за ${attempt} попыток`);
+        }
+
+        return result;
+      } catch (error) {
+        const errorInfo = analyzeError(error);
+
+        // Обновляем статистику
+        this.stats.errorsByType[errorInfo.type] =
+          (this.stats.errorsByType[errorInfo.type] || 0) + 1;
+
+        if (this.options.debug) {
+          console.log(`❌ ApiClient: Ошибка на попытке ${attempt}:`, errorInfo.userMessage);
+        }
+
+        // Отправляем событие об ошибке
+        if (this.options.enableEvents) {
+          this.emit("requestError", {
+            attempt,
+            maxRetries: this.options.maxRetries,
+            errorInfo,
+            chunkInfo: options.chunkInfo,
+            willRetry: attempt < this.options.maxRetries && isRetryable(errorInfo.type),
+          });
+
+          // Специальные события для разных типов ошибок
+          if (errorInfo.type === ErrorType.RATE_LIMITED) {
+            this.emit("rateLimited", errorInfo);
+          } else if (errorInfo.type === ErrorType.API_OVERLOADED) {
+            this.emit("apiOverloaded", errorInfo);
+          }
+        }
+
+        // Проверяем, можно ли повторить запрос
+        if (attempt >= this.options.maxRetries || !isRetryable(errorInfo.type)) {
+          this.stats.failedRequests++;
+
+          if (this.options.enableEvents) {
+            this.emit("requestFailed", {
+              finalAttempt: attempt,
+              errorInfo,
+              chunkInfo: options.chunkInfo,
+            });
+          }
+
+          throw errorInfo;
+        }
+
+        // Рассчитываем задержку и ждем
+        const delay = getRetryDelay(errorInfo.type, attempt, errorInfo.retryAfter);
+
+        if (this.options.debug) {
+          console.log(`⏳ ApiClient: Ожидание ${delay}ms перед попыткой ${attempt + 1}`);
+        }
+
+        if (this.options.enableEvents) {
+          this.emit("retryDelay", {
+            attempt: attempt + 1,
+            delay,
+            errorType: errorInfo.type,
+            chunkInfo: options.chunkInfo,
+          });
+        }
+
+        this.stats.retriesPerformed++;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    // Этот код не должен выполняться
+    throw new Error("Unexpected end of retry loop");
+  }
+
+  /**
+   * Получение статистики работы клиента
+   */
+  getStats(): ApiClientStats {
+    return { ...this.stats };
+  }
+
+  /**
+   * Сброс статистики
+   */
+  resetStats(): void {
+    this.stats = {
+      totalRequests: 0,
+      successfulRequests: 0,
+      failedRequests: 0,
+      retriesPerformed: 0,
+      lastRequestTime: 0,
+      errorsByType: {},
+    };
+
+    if (this.options.debug) {
+      console.log("📊 ApiClient: Статистика сброшена");
+    }
+  }
+
+  /**
+   * Проверка работоспособности API
+   */
+  async healthCheck(): Promise<{ status: "ok" | "error"; message: string }> {
+    try {
+      await this.request("Test connection", { chunkInfo: "health-check" });
+      return { status: "ok", message: "API доступен" };
+    } catch (error) {
+      const errorInfo = error as ErrorInfo;
+      return {
+        status: "error",
+        message: errorInfo.userMessage,
+      };
+    }
+  }
+}
+
+// Глобальный экземпляр клиента для использования в приложении
+export const apiClient = new ApiClient({
+  debug: process.env.NODE_ENV === "development",
+  enableEvents: true,
+});
+
+```
+ПРОГРЕСС: День 1, Шаг 1.3 завершен
+СЛЕДУЮЩИЙ ШАГ: Создание hooks/useRetryQueue.ts
+
+Шаг 1.4: Создание useRetryQueue.ts
+📝 Создание хука для управления retry очередью
+Создайте файл client/src/hooks/useRetryQueue.ts и скопируйте туда код:
+```
+// Хук для управления персистентной очередью retry с событиями и localStorage
+import { useState, useCallback, useEffect } from "react";
+import { ErrorInfo } from "../utils/error-handler";
+import { apiClient } from "../services/ApiClient";
+
+export interface QueueItem {
+  id: string;
+  chunk: string;
+  errorInfo: ErrorInfo;
+  attempts: number;
+  timestamp: number;
+  chunkInfo?: string;
+  lastAttemptTime?: number;
+}
+
+export interface RetryQueueStats {
+  totalItems: number;
+  processing: boolean;
+  processed: number;
+  failed: number;
+  lastProcessTime?: number;
+}
+
+export interface UseRetryQueueReturn {
+  queue: QueueItem[];
+  stats: RetryQueueStats;
+  enqueue: (chunk: string, errorInfo: ErrorInfo, chunkInfo?: string) => void;
+  processQueue: (onProgress?: (current: number, total: number) => void) => Promise<{
+    processed: number;
+    successful: number;
+    failed: number;
+  }>;
+  removeFromQueue: (id: string) => void;
+  clearQueue: () => void;
+  isProcessing: boolean;
+}
+
+const STORAGE_KEY = "latvian-app-retry-queue";
+const MAX_QUEUE_SIZE = 50; // Ограничиваем размер очереди
+
+export function useRetryQueue(): UseRetryQueueReturn {
+  const [queue, setQueue] = useState<QueueItem[]>(() => {
+    // Восстанавливаем очередь из localStorage при инициализации
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        console.log(`🔄 Восстановлена очередь retry: ${parsed.length} элементов`);
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("⚠️ Ошибка при восстановлении очереди из localStorage:", error);
+    }
+    return [];
+  });
+
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [stats, setStats] = useState<RetryQueueStats>({
+    totalItems: 0,
+    processing: false,
+    processed: 0,
+    failed: 0,
+  });
+
+  // Сохраняем очередь в localStorage при изменении
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
+
+      // Обновляем статистику
+      setStats(prev => ({
+        ...prev,
+        totalItems: queue.length,
+      }));
+
+      console.log(`💾 Очередь сохранена: ${queue.length} элементов`);
+    } catch (error) {
+      console.warn("⚠️ Ошибка при сохранении очереди в localStorage:", error);
+    }
+  }, [queue]);
+
+  /**
+   * Добавление элемента в очередь
+   */
+  const enqueue = useCallback((chunk: string, errorInfo: ErrorInfo, chunkInfo?: string) => {
+    const item: QueueItem = {
+      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      chunk,
+      errorInfo,
+      attempts: 0,
+      timestamp: Date.now(),
+      chunkInfo,
+    };
+
+    setQueue(prevQueue => {
+      // Проверяем, нет ли уже такого чанка в очереди (избегаем дубликатов)
+      const existingIndex = prevQueue.findIndex(existingItem => existingItem.chunk === chunk);
+
+      if (existingIndex !== -1) {
+        // Обновляем существующий элемент
+        const updatedQueue = [...prevQueue];
+        updatedQueue[existingIndex] = {
+          ...updatedQueue[existingIndex],
+          errorInfo,
+          timestamp: Date.now(),
+          chunkInfo,
+        };
+        console.log(`🔄 Обновлен элемент очереди: ${item.id}`);
+        return updatedQueue;
+      }
+
+      // Добавляем новый элемент
+      const newQueue = [...prevQueue, item];
+
+      // Ограничиваем размер очереди
+      if (newQueue.length > MAX_QUEUE_SIZE) {
+        console.warn(`⚠️ Очередь превысила максимальный размер. Удаляются старые элементы.`);
+        return newQueue.slice(-MAX_QUEUE_SIZE);
+      }
+
+      console.log(`➕ Добавлен в очередь retry: ${item.id} (${errorInfo.userMessage})`);
+      return newQueue;
+    });
+  }, []);
+
+  /**
+   * Обработка всей очереди
+   */
+  const processQueue = useCallback(
+    async (
+      onProgress?: (current: number, total: number) => void
+    ): Promise<{ processed: number; successful: number; failed: number }> => {
+      if (isProcessing) {
+        console.warn("⚠️ Обработка очереди уже выполняется");
+        return { processed: 0, successful: 0, failed: 0 };
+      }
+
+      if (queue.length === 0) {
+        console.log("ℹ️ Очередь retry пуста");
+        return { processed: 0, successful: 0, failed: 0 };
+      }
+
+      setIsProcessing(true);
+      setStats(prev => ({ ...prev, processing: true, processed: 0, failed: 0 }));
+
+      console.log(`🚀 Начинаем обработку очереди: ${queue.length} элементов`);
+
+      const results = {
+        processed: 0,
+        successful: 0,
+        failed: 0,
+      };
+
+      const queueCopy = [...queue];
+      const successfulIds: string[] = [];
+
+      for (let i = 0; i < queueCopy.length; i++) {
+        const item = queueCopy[i];
+
+        try {
+          // Обновляем прогресс
+          onProgress?.(i + 1, queueCopy.length);
+
+          setStats(prev => ({
+            ...prev,
+            processed: i + 1,
+          }));
+
+          console.log(`🔄 Обработка элемента ${i + 1}/${queueCopy.length}: ${item.id}`);
+
+          // Обновляем количество попыток
+          item.attempts++;
+          item.lastAttemptTime = Date.now();
+
+          // Отправляем запрос через ApiClient
+          const result = await apiClient.request(item.chunk, {
+            chunkInfo: item.chunkInfo || `retry-queue-item-${i + 1}`,
+          });
+
+          console.log(`✅ Успешно обработан: ${item.id}`);
+
+          successfulIds.push(item.id);
+          results.successful++;
+        } catch (error) {
+          console.log(`❌ Ошибка при обработке ${item.id}:`, error);
+          results.failed++;
+
+          // Обновляем информацию об ошибке в элементе очереди
+          if (error && typeof error === "object") {
+            item.errorInfo = error as ErrorInfo;
+          }
+        }
+
+        results.processed++;
+      }
+
+      // Удаляем успешно обработанные элементы из очереди
+      if (successfulIds.length > 0) {
+        setQueue(prevQueue => prevQueue.filter(item => !successfulIds.includes(item.id)));
+        console.log(`🧹 Удалено из очереди ${successfulIds.length} успешно обработанных элементов`);
+      }
+
+      setIsProcessing(false);
+      setStats(prev => ({
+        ...prev,
+        processing: false,
+        lastProcessTime: Date.now(),
+      }));
+
+      console.log(`🏁 Обработка очереди завершена:`, results);
+      return results;
+    },
+    [queue, isProcessing]
+  );
+
+  /**
+   * Удаление элемента из очереди
+   */
+  const removeFromQueue = useCallback((id: string) => {
+    setQueue(prevQueue => {
+      const filtered = prevQueue.filter(item => item.id !== id);
+      console.log(`🗑️ Удален из очереди: ${id}`);
+      return filtered;
+    });
+  }, []);
+
+  /**
+   * Очистка всей очереди
+   */
+  const clearQueue = useCallback(() => {
+    setQueue([]);
+    setStats(prev => ({
+      ...prev,
+      totalItems: 0,
+      processed: 0,
+      failed: 0,
+    }));
+    console.log("🧹 Очередь retry очищена");
+  }, []);
+
+  return {
+    queue,
+    stats,
+    enqueue,
+    processQueue,
+    removeFromQueue,
+    clearQueue,
+    isProcessing,
+  };
+}
+
+```
+ Теперь нужно начать интеграцию созданных модулей с существующим кодом.
+Согласно плану, День 2 включает:
+
+Обновление useProcessing.ts - интеграция с retry queue
+Обновление APIStatusBar в App.tsx для работы с retry queue
+Обновление App.tsx для передачи props
+
+Начну с первого и самого важного шага - интеграции useProcessing.ts с новыми модулями.
+
+Начинаем День 2: Интеграция модулей
+📋 День 2, Шаг 2.1: Обновление useProcessing.ts
+Сейчас мы интегрируем новые модули в существующий useProcessing.ts. Это ключевой шаг!
+Найдите файл client/src/hooks/useProcessing.ts и найдем, куда добавить интеграцию.
+Теперь создам интеграцию новых модулей с существующим useProcessing.ts:
+Я создал полную перезапись useProcessing.ts с интеграцией всех новых модулей. Файл содержит:
+
+Все существующие состояния и функциональность
+Интеграцию с useRetryQueue
+Подписку на события ApiClient
+Обновленную обработку ошибок через error-handler
+Новую функцию processRetryQueue
+Полный return объект с новыми retry функциями
+
+Сохранил всю оригинальную логику, но добавил модульную архитектуру. Теперь пользователь может просто заменить весь файл.
+```
+import React from "react";
+import type { FlashcardNew, AppMode, AppState, ProcessingProgress } from "../types";
+import { callClaude } from "../claude";
+import { textToCards, mergeCardsByBaseForm, splitIntoSentences } from "../utils/cardUtils";
+
+// НОВЫЕ ИМПОРТЫ - интеграция с модульной архитектурой
+import { useRetryQueue } from "./useRetryQueue";
+import { analyzeError, ErrorType } from "../utils/error-handler";
+import { apiClient } from "../services/ApiClient";
+
+// ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩУЮ КОНФИГУРАЦИЮ ПРОЕКТА
+import { defaultConfig } from "../config";
+
+export function useProcessing(inputText: string, setMode: (mode: AppMode) => void) {
+  // Основные состояния приложения
+  const [state, setState] = React.useState<AppState>("input");
+  const [flashcards, setFlashcards] = React.useState<FlashcardNew[]>([]);
+  const [translationText, setTranslationText] = React.useState("");
+  const [processingProgress, setProcessingProgress] = React.useState<ProcessingProgress>({
+    current: 0,
+    total: 0,
+    step: "",
+  });
+  const [formTranslations, setFormTranslations] = React.useState<Map<string, string>>(new Map());
+
+  // НОВОЕ: Интеграция retry queue для персистентной обработки ошибок
+  const retryQueue = useRetryQueue();
+
+  // НОВОЕ: Подписка на события ApiClient для автоматического мониторинга ошибок
+  React.useEffect(() => {
+    const handleRequestError = (eventData: any) => {
+      const { errorInfo, chunkInfo, willRetry } = eventData;
+
+      console.log("🔍 ApiClient error event:", {
+        errorType: errorInfo.type,
+        willRetry,
+        chunkInfo: chunkInfo?.description || "unknown-chunk",
+      });
+
+      // Если автоматический retry исчерпан и ошибка retryable, добавляем в очередь
+      if (!willRetry && errorInfo.retryable && chunkInfo?.originalChunk) {
+        console.log("➕ Добавляем в retry queue из-за исчерпания автоматических попыток");
+        retryQueue.enqueue(
+          chunkInfo.originalChunk,
+          errorInfo,
+          chunkInfo.description || `chunk-${Date.now()}`
+        );
+      }
+    };
+
+    const handleRateLimit = (errorInfo: any) => {
+      console.warn("⚠️ Rate limit обнаружен:", errorInfo.userMessage);
+      // Можно добавить toast уведомление в будущем
+    };
+
+    const handleApiOverload = (errorInfo: any) => {
+      console.warn("⚠️ API перегружен:", errorInfo.userMessage);
+      // Можно добавить специальное предупреждение в будущем
+    };
+
+    // Подписываемся на события ApiClient
+    apiClient.on("requestError", handleRequestError);
+    apiClient.on("rateLimited", handleRateLimit);
+    apiClient.on("apiOverloaded", handleApiOverload);
+
+    return () => {
+      // Отписываемся при размонтировании компонента
+      apiClient.off("requestError", handleRequestError);
+      apiClient.off("rateLimited", handleRateLimit);
+      apiClient.off("apiOverloaded", handleApiOverload);
+    };
+  }, [retryQueue.enqueue]);
+
+  // Функция сохранения переводов форм слов в глобальном состоянии
+  const saveFormTranslations = React.useCallback((cards: FlashcardNew[]) => {
+    cards.forEach(card => {
+      if (card.base_form && card.translations && card.translations.length > 0) {
+        const translation = card.translations[0];
+        setFormTranslations(prev => new Map(prev.set(card.base_form, translation)));
+      }
+    });
+  }, []);
+
+  // ОБНОВЛЕННАЯ функция обработки одного чанка с интеграцией новой архитектуры ошибок
+  const processChunkWithContext = React.useCallback(
+    async (
+      chunk: string,
+      chunkIndex: number,
+      totalChunks: number,
+      contextChunks?: string[]
+    ): Promise<FlashcardNew[]> => {
+      console.log(
+        `🔄 Обработка чанка ${chunkIndex + 1}/${totalChunks}: "${chunk.substring(0, 50)}..."`
+      );
+
+      // Проверяем contextChunks на undefined для безопасности
+      const safeContextChunks = contextChunks || [];
+
+      // Формируем контекстную информацию для лучшего понимания
+      let contextText = "";
+      if (safeContextChunks.length > 1) {
+        const prevChunk = chunkIndex > 0 ? safeContextChunks[chunkIndex - 1] : "";
+        const nextChunk =
+          chunkIndex < safeContextChunks.length - 1 ? safeContextChunks[chunkIndex + 1] : "";
+
+        if (prevChunk || nextChunk) {
+          contextText = `\n\nДополнительный контекст:\nПредыдущий фрагмент: ${prevChunk}\nСледующий фрагмент: ${nextChunk}`;
+        }
+      }
+
+      // ОРИГИНАЛЬНЫЙ ПРОМПТ - восстановлен без изменений
+      // Используем существующую конфигурацию проекта
+      const config = defaultConfig.processing;
+
+      const prompt = config.enablePhraseExtraction
+        ? // НОВЫЙ УЛУЧШЕННЫЙ ПРОМПТ: строгий подход к полноте
+          `Analyze these Latvian sentences systematically for Russian learners: "${chunk}"\n\n` +
+          `STEP 1: Extract EVERY INDIVIDUAL WORD (mandatory):\n` +
+          `- Include absolutely ALL words from the text, no exceptions\n` +
+          `- Even small words like "ir", "ar", "šodien", "ļoti", "agri"\n` +
+          `- Different forms of same word (grib AND negrib as separate entries)\n` +
+          `- Pronouns, prepositions, adverbs - everything\n\n` +
+          `STEP 2: Add meaningful phrases (bonus):\n` +
+          `- Common collocations (iebiezinātais piens = сгущенное молоко)\n` +
+          `- Compound expressions (dzimšanas diena = день рождения)\n` +
+          `- Prepositional phrases (pie cepšanas = за выпечкой)\n\n` +
+          `CRITICAL REQUIREMENTS:\n` +
+          `1. Count words in original text and ensure SAME number of individual words in output\n` +
+          `2. Every single word must appear as individual entry\n` +
+          `3. Then add phrases as additional entries\n` +
+          `4. Mark each entry with item_type: "word" or "phrase"\n\n` +
+          `For each item create:\n` +
+          `- front: exact form from text\n` +
+          `- back: Russian translation of this specific form\n` +
+          `- base_form: dictionary form\n` +
+          `- base_translation: Russian translation of dictionary form\n` +
+          `- word_form_translation: translation of the specific form\n` +
+          `- original_phrase: the sentence containing it\n` +
+          `- phrase_translation: Russian translation of the sentence\n` +
+          `- text_forms: [form from text]\n` +
+          `- item_type: "word" or "phrase"\n\n` +
+          `EXAMPLES:\n` +
+          `Word: {"front": "agri", "back": "рано", "item_type": "word"}\n` +
+          `Word: {"front": "šodien", "back": "сегодня", "item_type": "word"}\n` +
+          `Word: {"front": "grib", "back": "хочет", "item_type": "word"}\n` +
+          `Phrase: {"front": "dzimšanas diena", "back": "день рождения", "item_type": "phrase"}\n\n` +
+          `VERIFICATION: Text has approximately ${chunk.split(/\s+/).filter(w => w.length > 0).length} words.\n` +
+          `Your response must include AT LEAST ${Math.floor(chunk.split(/\s+/).filter(w => w.length > 0).length * 0.9)} individual word entries.\n\n` +
+          `Context: ${contextText}\n\n` +
+          `Return valid JSON array of objects.`
+        : // СТАРЫЙ ПРОМПТ: только слова (тоже улучшенный)
+          `Extract EVERY individual word from these Latvian sentences: "${chunk}"\n\n` +
+          `CRITICAL: Include absolutely ALL words - no exceptions!\n` +
+          `- Small words: ir, ar, uz, pie, šodien, agri, ļoti\n` +
+          `- All verb forms: grib, negrib, pamostas, dodas\n` +
+          `- All pronouns: viņa, viņas, sev\n` +
+          `- Everything without exception\n\n` +
+          `Target: approximately ${chunk.split(/\s+/).filter(w => w.length > 0).length} word entries.\n\n` +
+          `Create vocabulary cards for Russian learners:\n` +
+          `- front: exact word form from text\n` +
+          `- back: translation of this specific word form in Russian\n` +
+          `- base_form: dictionary form\n` +
+          `- base_translation: translation of dictionary form\n` +
+          `- word_form_translation: translation of the specific form\n` +
+          `- original_phrase: the sentence containing the word\n` +
+          `- phrase_translation: Russian translation of the sentence\n` +
+          `- text_forms: array with the word form\n\n` +
+          `CRITICAL: word_form_translation must match the specific form.\n` +
+          `Example: "mammai" → "маме" (not "мама")\n\n` +
+          `Context: ${contextText}\n\n` +
+          `Return valid JSON array of objects.`;
+
+      try {
+        // НОВОЕ: Используем ApiClient с дополнительной информацией о чанке
+        const raw = await apiClient.request(prompt, {
+          chunkInfo: {
+            description: `chunk-${chunkIndex + 1}-of-${totalChunks}`,
+            originalChunk: chunk,
+            index: chunkIndex,
+            total: totalChunks,
+          },
+        });
+
+        // Проверяем на структурированные ошибки (для обратной совместимости со старым кодом)
+        if (raw.startsWith("[ERROR:")) {
+          const errorData = JSON.parse(raw.slice(7, -1));
+          const errorInfo = analyzeError(errorData);
+
+          console.log("📦 Структурированная ошибка получена:", errorInfo.userMessage);
+
+          // Создаем error карточку для немедленного отображения пользователю
+          const errorCard: FlashcardNew = {
+            id: `error_${Date.now()}_${Math.random()}`,
+            base_form: `error_${errorInfo.type}_${Date.now()}`,
+            word_type: "other",
+            translations: [errorInfo.userMessage],
+            contexts: [
+              {
+                latvian: chunk.substring(0, 100) + (chunk.length > 100 ? "..." : ""),
+                russian: errorInfo.recommendation,
+                word_in_context: errorInfo.type,
+              },
+            ],
+            visible: true,
+            needsReprocessing: true, // Флаг для APIStatusBar
+          };
+
+          return [errorCard];
+        }
+
+        // Обычная обработка успешного ответа от Claude
+        const cleanedText = raw
+          .replace(/```json\s*/g, "")
+          .replace(/```\s*$/g, "")
+          .trim();
+
+        const parsed = JSON.parse(cleanedText);
+        const cardsArray = Array.isArray(parsed) ? parsed : [parsed];
+
+        const processedCards = textToCards(cardsArray).map(card => ({
+          ...card,
+          id: card.id || `${Date.now()}_${Math.random()}`,
+          visible: true,
+          needsReprocessing: false, // Успешно обработано
+        }));
+
+        console.log(
+          `✅ Чанк ${chunkIndex + 1} успешно обработан: ${processedCards.length} карточек`
+        );
+
+        // Сохраняем переводы форм слов в глобальном состоянии
+        saveFormTranslations(processedCards);
+
+        return processedCards;
+      } catch (error) {
+        // НОВОЕ: Используем error-handler для анализа и классификации ошибки
+        const errorInfo = analyzeError(error);
+
+        console.error(`❌ Ошибка при обработке чанка ${chunkIndex + 1}:`, errorInfo.userMessage);
+
+        // Создаем error карточку для отображения пользователю
+        const errorCard: FlashcardNew = {
+          id: `error_${Date.now()}_${Math.random()}`,
+          base_form: `error_${errorInfo.type}_${Date.now()}`,
+          word_type: "other",
+          translations: [errorInfo.userMessage],
+          contexts: [
+            {
+              latvian: chunk.substring(0, 100) + (chunk.length > 100 ? "..." : ""),
+              russian: errorInfo.recommendation,
+              word_in_context: errorInfo.type,
+            },
+          ],
+          visible: true,
+          needsReprocessing: true, // Флаг для APIStatusBar
+        };
+
+        // Если ошибка retryable, она уже добавлена в retry queue через события ApiClient
+        // Здесь просто возвращаем error карточку для немедленного отображения
+        return [errorCard];
+      }
+    },
+    [saveFormTranslations]
+  );
+
+  // НОВОЕ: Функция обработки retry queue с прогрессом
+  const processRetryQueue = React.useCallback(
+    async (onProgress?: (current: number, total: number) => void) => {
+      console.log("🚀 Начинаем обработку retry queue");
+
+      // Устанавливаем состояние обработки
+      setState("loading");
+
+      // Создаем callback для обновления прогресса
+      const progressCallback = (current: number, total: number) => {
+        setProcessingProgress({
+          current,
+          total,
+          step: `Повторная обработка ${current}/${total}`,
+        });
+        onProgress?.(current, total);
+      };
+
+      try {
+        const results = await retryQueue.processQueue(progressCallback);
+
+        console.log("🏁 Retry queue обработан:", results);
+
+        // Если были успешные обработки, обновляем интерфейс
+        if (results.successful > 0) {
+          setState("ready");
+        }
+
+        return results;
+      } catch (error) {
+        console.error("❌ Ошибка при обработке retry queue:", error);
+        throw error;
+      } finally {
+        // Очищаем прогресс после завершения
+        setProcessingProgress({ current: 0, total: 0, step: "" });
+      }
+    },
+    [retryQueue.processQueue]
+  );
+
+  // Основная функция обработки текста (чанк-за-чанком)
+  const processText = React.useCallback(async () => {
+    if (!inputText.trim()) {
+      console.warn("⚠️ Пустой текст для обработки");
+      return;
+    }
+
+    console.log("🚀 Начинаем обработку текста:", inputText.substring(0, 100) + "...");
+
+    // Переводим в состояние загрузки и очищаем предыдущие данные
+    setState("loading");
+    setFlashcards([]);
+    setTranslationText("");
+    setFormTranslations(new Map());
+
+    try {
+      // Разбиваем текст на предложения
+      const sentences = splitIntoSentences(inputText);
+      console.log(`📝 Текст разбит на ${sentences.length} предложений`);
+
+      // Группируем предложения в чанки по 3
+      const chunks = [];
+      for (let i = 0; i < sentences.length; i += 3) {
+        const chunk = sentences
+          .slice(i, i + 3)
+          .join(" ")
+          .trim();
+        if (chunk) chunks.push(chunk);
+      }
+
+      console.log(`📦 Создано ${chunks.length} чанков для обработки`);
+
+      setProcessingProgress({
+        current: 0,
+        total: chunks.length,
+        step: "Подготовка к обработке...",
+      });
+
+      const allCards: FlashcardNew[] = [];
+      const translationParts: string[] = [];
+
+      // Обрабатываем каждый чанк последовательно
+      for (let i = 0; i < chunks.length; i++) {
+        setProcessingProgress({
+          current: i + 1,
+          total: chunks.length,
+          step: `Обработка чанка ${i + 1} из ${chunks.length}`,
+        });
+
+        console.log(`📦 Обрабатываем чанк ${i + 1}/${chunks.length}`);
+
+        const chunkCards = await processChunkWithContext(chunks[i], i, chunks.length, chunks);
+
+        if (chunkCards && chunkCards.length > 0) {
+          allCards.push(...chunkCards);
+
+          // Генерируем перевод чанка из успешных карточек
+          const validCards = chunkCards.filter(card => !card.needsReprocessing);
+          if (validCards.length > 0 && validCards[0].contexts?.[0]?.russian) {
+            translationParts.push(validCards[0].contexts[0].russian);
+          }
+        }
+
+        // Задержка между запросами для соблюдения rate limits
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      // Объединяем карточки с одинаковыми base_form
+      const mergedCards = mergeCardsByBaseForm(allCards);
+
+      console.log(
+        `🎉 Обработка завершена: ${mergedCards.length} уникальных карточек из ${allCards.length} общих`
+      );
+
+      // Устанавливаем финальные данные
+      setFlashcards(mergedCards);
+      setTranslationText(translationParts.join(" "));
+      setState("ready");
+      setMode("flashcards");
+    } catch (error) {
+      console.error("💥 Критическая ошибка обработки:", error);
+      setState("input");
+      setProcessingProgress({
+        current: 0,
+        total: 0,
+        step: "Ошибка обработки",
+      });
+    }
+  }, [inputText, processChunkWithContext, setMode]);
+
+  // Функция обновления отдельной карточки
+  const updateCard = React.useCallback((id: string, updates: Partial<FlashcardNew>) => {
+    setFlashcards(prev => prev.map(card => (card.id === id ? { ...card, ...updates } : card)));
+    console.log(`📝 Обновлена карточка ${id}:`, updates);
+  }, []);
+
+  // Функция переключения видимости карточки
+  const toggleCardVisibility = React.useCallback((id: string) => {
+    setFlashcards(prev =>
+      prev.map(card => (card.id === id ? { ...card, visible: !card.visible } : card))
+    );
+    console.log(`👁️ Переключена видимость карточки ${id}`);
+  }, []);
+
+  // Функция удаления карточки
+  const deleteCard = React.useCallback((id: string) => {
+    setFlashcards(prev => prev.filter(card => card.id !== id));
+    console.log(`🗑️ Удалена карточка ${id}`);
+  }, []);
+
+  // Функция добавления новой карточки
+  const addNewCard = React.useCallback((newCard: Omit<FlashcardNew, "id">) => {
+    const cardWithId = {
+      ...newCard,
+      id: `new_${Date.now()}_${Math.random()}`,
+      visible: true,
+      needsReprocessing: false,
+    };
+    setFlashcards(prev => [...prev, cardWithId]);
+    console.log("➕ Добавлена новая карточка:", cardWithId.base_form);
+  }, []);
+
+  // Функция полной очистки всех данных
+  const clearAll = React.useCallback(() => {
+    console.log("🧹 Полная очистка всех данных");
+
+    setFlashcards([]);
+    setTranslationText("");
+    setFormTranslations(new Map());
+    setState("input");
+    setProcessingProgress({ current: 0, total: 0, step: "" });
+
+    // НОВОЕ: Очищаем retry queue при полной очистке
+    retryQueue.clearQueue();
+  }, [retryQueue.clearQueue]);
+
+  // Возвращаем все состояния и функции для использования в компонентах
+  return {
+    // Основные состояния
+    state,
+    flashcards,
+    translationText,
+    processingProgress,
+    formTranslations,
+
+    // Основные функции обработки и управления
+    processText,
+    updateCard,
+    toggleCardVisibility,
+    deleteCard,
+    addNewCard,
+    clearAll,
+
+    // Сеттеры для прямого управления состоянием (для импорта/экспорта)
+    setFlashcards,
+    setTranslationText,
+    setState,
+    setFormTranslations,
+
+    // НОВОЕ: Retry функциональность для обработки ошибок
+    processRetryQueue,
+    retryQueue: {
+      queue: retryQueue.queue,
+      stats: retryQueue.stats,
+      isProcessing: retryQueue.isProcessing,
+      clearQueue: retryQueue.clearQueue,
+      removeFromQueue: retryQueue.removeFromQueue,
+    },
+  };
+}
+
+```
+📝 Шаг 2.2: Обновление APIStatusBar в App.tsx
+Теперь обновим App.tsx для интеграции с retry queue:
+```
+bla
+import React from "react";
+import type { AppMode } from "./types";
+
+// Импорт компонентов
+import Header from "./components/Header";
+import ModeSelector from "./components/ModeSelector";
+import Footer from "./components/Footer";
+import TextInputView from "./components/TextInputView";
+import FlashcardsView from "./components/FlashcardsView";
+import ReadingView from "./components/ReadingView";
+import TranslationView from "./components/TranslationView";
+import EditView from "./components/EditView";
+
+// Импорт хуков
+import { useProcessing } from "./hooks/useProcessing";
+import { useKeyboardNavigation } from "./hooks/useKeyboardNavigation";
+import { useFileOperations } from "./hooks/useFileOperations";
+
+interface APIStatusBarProps {
+  flashcards: FlashcardNew[];
+  onRetryProcessing?: () => void;
+}
+const APIStatusBar: React.FC<APIStatusBarProps> = ({ flashcards, onRetryProcessing }) => {
+  // Подсчитываем карточки требующие повторной обработки
+  const cardsNeedingReprocessing = flashcards.filter(
+    card =>
+      (card as FlashcardNew & { needsReprocessing?: boolean }).needsReprocessing ||
+      card.base_translation?.includes("[Translation needed:") ||
+      card.phrase_translation?.includes("[Chunk translation needed:") ||
+      card.front?.includes("Требуется обработка") ||
+      card.front?.includes("Превышен лимит") ||
+      card.front?.includes("Ошибка обработки")
+  );
+
+  // Не показываем если нет проблемных карточек
+  if (cardsNeedingReprocessing.length === 0) {
+    return null;
+  }
+
+  // Определяем тип проблемы
+  const hasOverloadErrors = cardsNeedingReprocessing.some(
+    card =>
+      card.front?.includes("Требуется обработка") || card.back?.includes("API временно перегружен")
+  );
+
+  const hasRateLimitErrors = cardsNeedingReprocessing.some(card =>
+    card.front?.includes("Превышен лимит")
+  );
+
+  const hasCriticalErrors = cardsNeedingReprocessing.some(
+    card => card.front?.includes("Ошибка обработки") || card.front?.includes("Критическая ошибка")
+  );
+
+  const getStatusInfo = () => {
+    if (hasOverloadErrors) {
+      return {
+        color: "bg-red-100 border-red-400 text-red-700",
+        icon: "🔴",
+        title: "Claude API перегружен",
+        message: `${cardsNeedingReprocessing.length} чанков требуют обработки. Сервер временно недоступен.`,
+        suggestion: "Обычно перегрузка длится 10-30 минут. Попробуйте позже.",
+      };
+    } else if (hasRateLimitErrors) {
+      return {
+        color: "bg-yellow-100 border-yellow-400 text-yellow-700",
+        icon: "🟡",
+        title: "Превышен лимит запросов",
+        message: `${cardsNeedingReprocessing.length} чанков требуют обработки. Превышена скорость запросов.`,
+        suggestion: "Подождите несколько минут и попробуйте снова.",
+      };
+    } else if (hasCriticalErrors) {
+      return {
+        color: "bg-orange-100 border-orange-400 text-orange-700",
+        icon: "🟠",
+        title: "Ошибка обработки",
+        message: `${cardsNeedingReprocessing.length} чанков требуют обработки. Произошла ошибка.`,
+        suggestion: "Проверьте подключение к интернету и попробуйте снова.",
+      };
+    } else {
+      return {
+        color: "bg-blue-100 border-blue-400 text-blue-700",
+        icon: "ℹ️",
+        title: "Требуется обработка",
+        message: `${cardsNeedingReprocessing.length} чанков требуют повторной обработки.`,
+        suggestion: "Нажмите кнопку повторить для получения переводов.",
+      };
+    }
+  };
+
+  const statusInfo = getStatusInfo();
+
+  return (
+    <div className={`border rounded-lg p-4 mb-4 ${statusInfo.color}`}>
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">{statusInfo.icon}</span>
+            <h3 className="font-semibold">{statusInfo.title}</h3>
+          </div>
+
+          <p className="mb-2">{statusInfo.message}</p>
+
+          {statusInfo.suggestion && (
+            <p className="text-sm opacity-80 mb-3">{statusInfo.suggestion}</p>
+          )}
+
+          {cardsNeedingReprocessing.length > 0 && (
+            <div className="text-sm mb-3">
+              <strong>Проблемные чанки:</strong>
+              <div className="mt-1 max-h-20 overflow-y-auto">
+                {cardsNeedingReprocessing.slice(0, 3).map((card, index) => (
+                  <div key={index} className="text-xs opacity-75">
+                    • {card.original_phrase?.substring(0, 60)}...
+                  </div>
+                ))}
+                {cardsNeedingReprocessing.length > 3 && (
+                  <div className="text-xs opacity-75">
+                    ... и еще {cardsNeedingReprocessing.length - 3}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Кнопки действий */}
+        <div className="flex flex-col gap-2 ml-4">
+          <button
+            onClick={() => {
+              if (onRetryProcessing) {
+                onRetryProcessing();
+              } else {
+                alert(
+                  `В разработке: повторная обработка ${cardsNeedingReprocessing.length} чанков. Пока что попробуйте обработать текст заново.`
+                );
+              }
+            }}
+            className="px-4 py-2 bg-white border border-current rounded hover:bg-opacity-80 text-sm font-medium transition-colors"
+            title={`Повторить обработку ${cardsNeedingReprocessing.length} чанков`}
+          >
+            🔄 Повторить
+          </button>
+        </div>
+      </div>
+
+      {/* Дополнительная информация в dev режиме */}
+      {process.env.NODE_ENV === "development" && (
+        <div className="mt-3 pt-3 border-t border-current border-opacity-30 text-xs opacity-60">
+          <div>Проблемных карточек: {cardsNeedingReprocessing.length}</div>
+          <div>
+            Типы ошибок: {hasOverloadErrors ? "overload " : ""}
+            {hasRateLimitErrors ? "rate-limit " : ""}
+            {hasCriticalErrors ? "critical " : ""}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+// Главный компонент приложения для изучения латышского языка
+const LatvianLearningApp: React.FC = () => {
+  // Локальные состояния UI
+  const [mode, setMode] = React.useState<AppMode>("text");
+  const [inputText, setInputText] = React.useState("");
+  const [currentIndex, setCurrentIndex] = React.useState(0);
+  const [flipped, setFlipped] = React.useState(false);
+  const [searchTerm, setSearchTerm] = React.useState("");
+  const [currentPage, setCurrentPage] = React.useState(0);
+
+  // Хук для бизнес-логики обработки
+  const {
+    state,
+    flashcards,
+    translationText,
+    processingProgress,
+    formTranslations,
+    processText,
+    updateCard,
+    toggleCardVisibility,
+    deleteCard,
+    addNewCard,
+    clearAll,
+    setFlashcards,
+    setTranslationText,
+    setState,
+    setFormTranslations, // ИСПРАВЛЕНО: Добавлена деструктуризация setFormTranslations
+  } = useProcessing(inputText, setMode);
+
+  // Функция загрузки импортированных данных
+  const onDataLoad = React.useCallback(
+    (data: ExportData) => {
+      setInputText(data.inputText);
+      setFlashcards(data.flashcards);
+      setTranslationText(data.translationText);
+
+      // КРИТИЧНО: Восстанавливаем formTranslations из импортированных данных
+      if (data.formTranslations && Array.isArray(data.formTranslations)) {
+        // Восстанавливаем из экспортированного массива
+        const restoredFormTranslations = new Map(data.formTranslations);
+        console.log("✅ Восстановлено переводов форм из экспорта:", restoredFormTranslations.size);
+
+        // Временно сохраняем в window для передачи в хук
+        window.tempFormTranslations = restoredFormTranslations;
+      } else {
+        // Если нет сохраненных formTranslations, восстанавливаем из карточек
+        const rebuiltFormTranslations = new Map<string, string>();
+
+        data.flashcards.forEach(card => {
+          if (Array.isArray(card.contexts)) {
+            card.contexts.forEach(context => {
+              if (Array.isArray(context.text_forms)) {
+                context.text_forms.forEach(form => {
+                  const cleanForm = form
+                    .toLowerCase()
+                    .trim()
+                    .replace(/[.,!?;:]/g, "");
+                  if (cleanForm && !rebuiltFormTranslations.has(cleanForm)) {
+                    // Используем base_translation как fallback
+                    rebuiltFormTranslations.set(cleanForm, card.base_translation);
+                  }
+                });
+              }
+            });
+          }
+        });
+
+        console.log("✅ Восстановлено переводов форм из карточек:", rebuiltFormTranslations.size);
+        window.tempFormTranslations = rebuiltFormTranslations;
+      }
+
+      // КРИТИЧНО: Устанавливаем состояние в 'ready' для активации всех режимов
+      setState("ready");
+
+      // Сбрасываем UI состояния
+      setCurrentIndex(0);
+      setFlipped(false);
+      setSearchTerm("");
+      setCurrentPage(0);
+      setMode("flashcards");
+
+      console.log("✅ Данные импортированы, режимы активированы");
+    },
+    [setFlashcards, setTranslationText, setState, setFormTranslations] // ИСПРАВЛЕНО: Добавлена setFormTranslations
+  );
+
+  // Хук для операций с файлами
+  const { exportData, importData } = useFileOperations({
+    flashcards,
+    inputText,
+    translationText,
+    formTranslations,
+    onDataLoad,
+  });
+
+  // Функция скрытия текущей карточки
+  const hideCurrentCard = React.useCallback(() => {
+    const visibleCards = flashcards.filter(card => card.visible !== false);
+    const currentCard = visibleCards[currentIndex];
+
+    if (currentCard) {
+      const cardIndex = flashcards.findIndex(card => card === currentCard);
+      console.log(`🔄 Скрываем карточку ${cardIndex}: ${currentCard.base_form}`);
+
+      // ИСПРАВЛЕНО: Используем React.startTransition для правильного обновления состояния
+      React.startTransition(() => {
+        toggleCardVisibility(cardIndex);
+
+        // Обновляем индекс после скрытия карточки
+        setTimeout(() => {
+          const newVisibleCards = flashcards.filter((card, idx) => {
+            if (idx === cardIndex) return false; // Скрытая карточка
+            return card.visible !== false;
+          });
+
+          console.log(`📊 Остается видимых карточек: ${newVisibleCards.length}`);
+
+          if (newVisibleCards.length === 0) {
+            setCurrentIndex(0);
+            setFlipped(false);
+          } else if (currentIndex >= newVisibleCards.length) {
+            setCurrentIndex(newVisibleCards.length - 1);
+            setFlipped(false);
+          } else {
+            setFlipped(false); // Сбрасываем flip в любом случае
+          }
+        }, 0); // Микрозадача для обновления после изменения видимости
+      });
+    }
+  }, [flashcards, currentIndex, toggleCardVisibility, setCurrentIndex, setFlipped]);
+
+  // Хук клавиатурной навигации
+  const { shortcuts } = useKeyboardNavigation({
+    mode,
+    state,
+    flashcards,
+    currentIndex,
+    flipped,
+    onIndexChange: setCurrentIndex,
+    onFlip: setFlipped,
+    onHideCard: hideCurrentCard,
+  });
+
+  // Функция очистки всех данных
+  const handleClear = React.useCallback(() => {
+    setInputText("");
+    setCurrentIndex(0);
+    setFlipped(false);
+    setSearchTerm("");
+    setCurrentPage(0);
+    setMode("text");
+    clearAll();
+
+    // Очищаем file input
+    const fileInput = document.getElementById("import-file-input") as HTMLInputElement;
+    if (fileInput) {
+      fileInput.value = "";
+    }
+  }, [clearAll]);
+
+  // Определяем, есть ли обработанные данные
+  const isProcessed = state === "ready";
+
+  return (
+    <div className="min-h-screen flex flex-col" style={{ backgroundColor: "#6A9BCC" }}>
+      <div className="flex-1 flex flex-col items-center justify-center py-8">
+        {/* Заголовок */}
+        <div className="w-full max-w-6xl mx-auto px-8 mb-8">
+          <Header onImport={importData} onExport={exportData} isProcessed={isProcessed} />
+        </div>
+
+        {/* Селектор режимов */}
+        <ModeSelector
+          mode={mode}
+          onChange={setMode}
+          onClear={handleClear}
+          isProcessed={isProcessed}
+        />
+
+        <APIStatusBar flashcards={flashcards} />
+
+        {/* Основной контент */}
+        <div className="flex-1 flex items-center justify-center w-full">
+          {mode === "text" && (
+            <TextInputView
+              inputText={inputText}
+              onChange={setInputText}
+              onProcessText={async () => {
+                await processText();
+                console.log("🎉 Обработка завершена! Переход в режим карточек...");
+                setMode("flashcards");
+              }}
+              state={state}
+              processingProgress={processingProgress}
+            />
+          )}
+
+          {mode === "flashcards" && (
+            <FlashcardsView
+              flashcards={flashcards}
+              currentIndex={currentIndex}
+              flipped={flipped}
+              onIndexChange={setCurrentIndex}
+              onFlip={setFlipped}
+              onHideCard={hideCurrentCard}
+              keyboardShortcuts={shortcuts}
+            />
+          )}
+
+          {mode === "reading" && (
+            <ReadingView
+              inputText={inputText}
+              formTranslations={formTranslations}
+              flashcards={flashcards}
+            />
+          )}
+
+          {mode === "translation" && <TranslationView translationText={translationText} />}
+
+          {mode === "edit" && (
+            <EditView
+              flashcards={flashcards}
+              searchTerm={searchTerm}
+              currentPage={currentPage}
+              formTranslations={formTranslations}
+              onSearchChange={setSearchTerm}
+              onPageChange={setCurrentPage}
+              onCardUpdate={updateCard}
+              onToggleVisibility={toggleCardVisibility}
+              onDeleteCard={deleteCard}
+              onAddCard={addNewCard}
+            />
+          )}
+        </div>
+
+        {/* Футер с уведомлениями */}
+        <Footer step={processingProgress.step} showDebug={process.env.NODE_ENV === "development"} />
+      </div>
+    </div>
+  );
+};
+
+export default LatvianLearningApp;
+
+```
+Дополнительные правки мы произвели в client\src\components\Footer.tsx
+поскольку: В файле Footer.tsx на строке 18 происходит ошибка Cannot read properties of undefined (reading 'includes') потому что параметр step может быть undefined, а метод includes() вызывается без проверки.
+Решение было таким:
+заменили этот код:
+```
+const isOverloaded = step === "Overloaded" || step.includes("529") || step.includes("Overloaded");
+const isCreditBalance = step === "credit balance" || step.includes("credit balance");
+const isNoConnection = step === "no connection" || !navigator.onLine;
+const isGeneralError = step === "error" && !isOverloaded && !isCreditBalance && !isNoConnection;
+```
+на этот:
+```
+// Безопасная проверка step на undefined перед использованием includes()
+const safeStep = step || "";
+const isOverloaded = safeStep === "Overloaded" || safeStep.includes("529") || safeStep.includes("Overloaded");
+const isCreditBalance = safeStep === "credit balance" || safeStep.includes("credit balance");
+const isNoConnection = safeStep === "no connection" || !navigator.onLine;
+const isGeneralError = safeStep === "error" && !isOverloaded && !isCreditBalance && !isNoConnection;
+```
+
+Затем внесли правки в client\src\components\TextInputView.tsx
+потому что возникала оршибка Ошибка: TextInputView.tsx:107 - onChange is not a function
+Мы исправили  несоответствие пропсов в TextInputView заменив эту чать кода:
+```
+interface TextInputViewProps extends BaseComponentProps {
+  inputText: string; // текущий введенный текст
+  onChange: (text: string) => void; // функция изменения текста ❌
+  onProcess: () => void; // функция запуска обработки ❌
+  state: AppState; // текущее состояние приложения
+  processingProgress: ProcessingProgress; // прогресс обработки
+}
+```
+на эту 
+```
+interface TextInputViewProps extends BaseComponentProps {
+  inputText: string; // текущий введенный текст
+  setInputText: (text: string) => void; // функция изменения текста ✅
+  onProcessText: () => void; // функция запуска обработки ✅
+  state: AppState; // текущее состояние приложения
+  processingProgress: ProcessingProgress; // прогресс обработки
+}
+```
+исправив эту часть кода:
+```
+onChange={(e) => onChange(e.target.value)}
+```
+на эту:
+```
+onChange={(e) => setInputText(e.target.value)}
+```
+и кнопку на:
+```
+onClick={onProcessText}  // вместо onProcess
+```
+исправив эту часть кода:
+```
+export const TextInputView: React.FC<TextInputViewProps> = ({
+  inputText,
+  onChange,
+  onProcess,
+  state,
+  processingProgress,
+  className = "",
+  "data-testid": testId,
+}) => {
+```
+на эту:
+```
+export const TextInputView: React.FC<TextInputViewProps> = ({
+  inputText,
+  setInputText,
+  onProcessText,
+  state,
+  processingProgress,
+  className = "",
+  "data-testid": testId,
+}) => {
+```
+ПРОГРЕСС: День 2, Шаги 2.1-2.2 завершены
+СЛЕДУЮЩИЙ ШАГ: Тестирование интеграции всех модулей
