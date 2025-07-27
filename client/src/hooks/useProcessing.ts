@@ -348,6 +348,17 @@ export function useProcessing(
     [saveForms]
   );
 
+  const generateTranslation = React.useCallback((cards: FlashcardNew[]) => {
+    const translations = new Set<string>();
+    cards.forEach(card => {
+      card.contexts.forEach(ctx => {
+        const text = ctx.phrase_translation?.trim();
+        if (text) translations.add(text);
+      });
+    });
+    setTranslationText(Array.from(translations).join(" "));
+  }, []);
+
   // НОВОЕ: Функция обработки retry queue с прогрессом
   const processRetryQueue = React.useCallback(
     async (onProgress?: (current: number, total: number) => void) => {
@@ -398,17 +409,6 @@ export function useProcessing(
     },
     [retryQueue.processQueue, flashcards, setFlashcards, setState, setMode, generateTranslation]
   );
-
-  const generateTranslation = React.useCallback((cards: FlashcardNew[]) => {
-    const translations = new Set<string>();
-    cards.forEach(card => {
-      card.contexts.forEach(ctx => {
-        const text = ctx.phrase_translation?.trim();
-        if (text) translations.add(text);
-      });
-    });
-    setTranslationText(Array.from(translations).join(" "));
-  }, []);
 
   // Основная функция обработки текста (чанк-за-чанком)
   const processText = React.useCallback(async () => {
