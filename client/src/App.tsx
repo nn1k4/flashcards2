@@ -18,16 +18,18 @@ import { useFileOperations } from "./hooks/useFileOperations";
 
 // НОВЫЕ ИМПОРТЫ - интеграция с модульной retry архитектурой
 import { ErrorType } from "./utils/error-handler";
+import type { QueueItem, RetryQueueStats } from "./hooks/useRetryQueue";
 
 // Интерфейс для APIStatusBar с поддержкой retry queue
 interface APIStatusBarProps {
   flashcards: FlashcardNew[];
   retryQueue?: {
-    queue: any[];
-    stats: any;
+    queue: QueueItem[];
+    stats: RetryQueueStats;
     isProcessing: boolean;
+    clearQueue?: () => void;
   };
-  onRetryProcessing?: () => Promise<any>;
+  onRetryProcessing?: () => Promise<{ processed: number; successful: number; failed: number }>;
   error?: string;
 }
 
@@ -40,7 +42,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
 }) => {
   // Анализ карточек с ошибками (для обратной совместимости со старой системой)
   const cardsNeedingReprocessing = flashcards.filter(
-    card => (card as any).needsReprocessing === true
+    card => (card as { needsReprocessing?: boolean }).needsReprocessing === true
   );
 
   // Приоритет отдаем retry queue если доступен, иначе fallback на старую логику
@@ -162,7 +164,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
           >
             Проблемные чанки:
           </div>
-          {retryQueue.queue.slice(0, 3).map((item, index) => (
+          {retryQueue.queue.slice(0, 3).map(item => (
             <div
               key={item.id}
               style={{

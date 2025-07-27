@@ -22,7 +22,7 @@ export interface ErrorInfo {
   type: ErrorType;
   code?: number;
   message: string;
-  originalError?: any;
+  originalError?: unknown;
   retryable: boolean;
   userMessage: string; // Понятное сообщение для пользователя
   recommendation: string; // Что делать пользователю
@@ -33,7 +33,7 @@ export interface ErrorInfo {
 /**
  * Анализирует ошибку и возвращает структурированную информацию
  */
-export function analyzeError(error: any): ErrorInfo {
+export function analyzeError(error: unknown): ErrorInfo {
   console.log("🔍 Анализ ошибки:", error);
 
   // Проверка HTTP статус кода
@@ -59,7 +59,7 @@ export function analyzeError(error: any): ErrorInfo {
   };
 }
 
-function analyzeHttpError(status: number, error: any): ErrorInfo {
+function analyzeHttpError(status: number, error: unknown): ErrorInfo {
   switch (status) {
     case 429:
       return {
@@ -140,7 +140,7 @@ function analyzeHttpError(status: number, error: any): ErrorInfo {
   }
 }
 
-function analyzeNetworkError(error: any): ErrorInfo {
+function analyzeNetworkError(error: unknown): ErrorInfo {
   const errorCode = error.code?.toUpperCase() || "";
   const errorMessage = error.message?.toLowerCase() || "";
 
@@ -187,7 +187,7 @@ function analyzeNetworkError(error: any): ErrorInfo {
   };
 }
 
-function extractRetryAfter(error: any): number | undefined {
+function extractRetryAfter(error: unknown): number | undefined {
   const retryAfter = error?.response?.headers?.["retry-after"];
   if (retryAfter) {
     const seconds = parseInt(retryAfter, 10);

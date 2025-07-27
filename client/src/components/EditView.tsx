@@ -110,7 +110,8 @@ export const EditView: React.FC<EditViewProps> = ({
             <tbody className="divide-y divide-gray-200">
               {cards.map(card => {
                 const realIndex = flashcards.findIndex(originalCard => originalCard === card);
-                const isSystem = (card as any).needsReprocessing === true;
+                const isSystem =
+                  (card as { needsReprocessing?: boolean }).needsReprocessing === true;
 
                 return (
                   <tr

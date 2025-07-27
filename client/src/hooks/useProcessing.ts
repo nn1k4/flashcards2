@@ -1,6 +1,5 @@
 import React from "react";
 import type { FlashcardNew, FlashcardOld, AppMode, AppState, ProcessingProgress } from "../types";
-import { callClaude } from "../claude";
 import {
   normalizeCards,
   mergeCardsByBaseForm,
@@ -10,11 +9,29 @@ import {
 
 // НОВЫЕ ИМПОРТЫ - интеграция с модульной архитектурой
 import { useRetryQueue } from "./useRetryQueue";
-import { analyzeError, ErrorType } from "../utils/error-handler";
+import { analyzeError, type ErrorInfo } from "../utils/error-handler";
 import { apiClient } from "../services/ApiClient";
 
 // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩУЮ КОНФИГУРАЦИЮ ПРОЕКТА
 import { defaultConfig } from "../config";
+
+interface ApiCardContext {
+  latvian?: string;
+  russian?: string;
+  word_in_context?: string;
+}
+
+interface ApiCard {
+  id?: string;
+  base_form?: string;
+  front?: string;
+  base_translation?: string;
+  translations?: string[];
+  text_forms?: string[];
+  word_form_translation?: string;
+  word_form_translations?: string[];
+  contexts?: ApiCardContext[];
+}
 
 export function useProcessing(
   inputText: string,
@@ -37,7 +54,11 @@ export function useProcessing(
 
   // НОВОЕ: Подписка на события ApiClient для автоматического мониторинга ошибок
   React.useEffect(() => {
-    const handleRequestError = (eventData: any) => {
+    const handleRequestError = (eventData: {
+      errorInfo: ErrorInfo;
+      chunkInfo?: { description?: string; originalChunk?: string } | string;
+      willRetry: boolean;
+    }) => {
       const { errorInfo, chunkInfo, willRetry } = eventData;
 
       console.log("🔍 ApiClient error event:", {
@@ -57,12 +78,12 @@ export function useProcessing(
       }
     };
 
-    const handleRateLimit = (errorInfo: any) => {
+    const handleRateLimit = (errorInfo: ErrorInfo) => {
       console.warn("⚠️ Rate limit обнаружен:", errorInfo.userMessage);
       // Можно добавить toast уведомление в будущем
     };
 
-    const handleApiOverload = (errorInfo: any) => {
+    const handleApiOverload = (errorInfo: ErrorInfo) => {
       console.warn("⚠️ API перегружен:", errorInfo.userMessage);
       // Можно добавить специальное предупреждение в будущем
     };
@@ -239,7 +260,7 @@ export function useProcessing(
         const parsed = JSON.parse(cleanedText);
         const cardsArray = Array.isArray(parsed) ? parsed : [parsed];
 
-        const oldCards = cardsArray.flatMap((card: any) => {
+        const oldCards = cardsArray.flatMap((card: ApiCard) => {
           const baseForm = card.base_form || card.front || "";
           const baseTrans = card.base_translation || card.translations?.[0] || "";
           const textForms = Array.isArray(card.text_forms)
@@ -271,8 +292,7 @@ export function useProcessing(
             ];
           }
 
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return card.contexts.map((ctx: any) => ({
+          return card.contexts.map(ctx => ({
             front: card.front || baseForm,
             back: formTrans,
             word_form_translation: formTrans,
@@ -353,8 +373,9 @@ export function useProcessing(
 
         if (results.cards && results.cards.length > 0) {
           results.cards.forEach(card => (card.visible = true));
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const cleanedPrev = flashcards.filter(c => !(c as any).needsReprocessing);
+          const cleanedPrev = flashcards.filter(
+            c => !(c as { needsReprocessing?: boolean }).needsReprocessing
+          );
           const merged = mergeCardsByBaseForm([...cleanedPrev, ...results.cards]);
           setFlashcards(merged);
           generateTranslation(merged);
@@ -473,24 +494,15 @@ export function useProcessing(
   }, [inputText, processChunkWithContext, setMode, generateTranslation]);
 
   // Функция обновления отдельной карточки
-  const updateCard = React.useCallback(
-    (
-      index: number,
-      field: string,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      value: any
-    ) => {
-      setFlashcards(prev => {
-        const copy = [...prev];
-        if (copy[index]) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (copy[index] as any)[field] = value;
-        }
-        return copy;
-      });
-    },
-    []
-  );
+  const updateCard = React.useCallback((index: number, field: string, value: unknown) => {
+    setFlashcards(prev => {
+      const copy = [...prev];
+      if (copy[index]) {
+        (copy[index] as unknown as Record<string, unknown>)[field] = value;
+      }
+      return copy;
+    });
+  }, []);
 
   // Функция переключения видимости карточки
   const toggleCardVisibility = React.useCallback((index: number) => {
