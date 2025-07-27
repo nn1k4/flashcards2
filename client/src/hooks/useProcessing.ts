@@ -159,9 +159,9 @@ export function useProcessing(
           `For each item create:\n` +
           `- front: exact form from text\n` +
           `- back: Russian translation of this specific form\n` +
-          `- base_form: dictionary form\n` +
-          `- base_translation: Russian translation of dictionary form\n` +
-          `- word_form_translation: translation of the specific form\n` +
+          `- base_form: dictionary form of the word\n` +
+          `- base_translation: Russian translation of that dictionary form\n` +
+          `- word_form_translation: Russian translation of the exact form from the text\n` +
           `- original_phrase: the sentence containing it\n` +
           `- phrase_translation: Russian translation of the sentence\n` +
           `- text_forms: [form from text]\n` +
@@ -174,7 +174,7 @@ export function useProcessing(
           `VERIFICATION: Text has approximately ${chunk.split(/\s+/).filter(w => w.length > 0).length} words.\n` +
           `Your response must include AT LEAST ${Math.floor(chunk.split(/\s+/).filter(w => w.length > 0).length * 0.9)} individual word entries.\n\n` +
           `Context: ${contextText}\n\n` +
-          `Return valid JSON array of objects.\n` +
+          `Return valid JSON array of objects. Each object must include: front, back, base_form, base_translation, word_form_translation, original_phrase, phrase_translation, text_forms, item_type.\n` +
           `CRITICAL: Return ONLY a valid JSON array. No explanations, no text before or after.\n` +
           `Your response must start with [ and end with ]\n` +
           `DO NOT include any text like "Here is the analysis" or explanations.\n` +
@@ -189,17 +189,18 @@ export function useProcessing(
           `Target: approximately ${chunk.split(/\s+/).filter(w => w.length > 0).length} word entries.\n\n` +
           `Create vocabulary cards for Russian learners:\n` +
           `- front: exact word form from text\n` +
-          `- back: translation of this specific word form in Russian\n` +
-          `- base_form: dictionary form\n` +
-          `- base_translation: translation of dictionary form\n` +
-          `- word_form_translation: translation of the specific form\n` +
+          `- back: Russian translation of this exact form\n` +
+          `- base_form: dictionary form of the word\n` +
+          `- base_translation: Russian translation of that dictionary form\n` +
+          `- word_form_translation: Russian translation of the exact form from the text\n` +
           `- original_phrase: the sentence containing the word\n` +
           `- phrase_translation: Russian translation of the sentence\n` +
-          `- text_forms: array with the word form\n\n` +
+          `- text_forms: array with the word form\n` +
+          `- item_type: "word"\n\n` +
           `CRITICAL: word_form_translation must match the specific form.\n` +
           `Example: "mammai" → "маме" (not "мама")\n\n` +
           `Context: ${contextText}\n\n` +
-          `Return valid JSON array of objects.\n` +
+          `Return valid JSON array of objects. Each object must include: front, back, base_form, base_translation, word_form_translation, original_phrase, phrase_translation, text_forms, item_type.\n` +
           `Your response must start with [ and end with ]\n` +
           `DO NOT include any text like "Here is the analysis" or explanations.\n` +
           `RESPOND WITH PURE JSON ONLY!`;
