@@ -34,43 +34,75 @@ export const normalizeCards = (cards: FlashcardOld[], sentence: string): Flashca
 };
 
 // Функция объединения карточек по base_form (убирает дубликаты)
-export const mergeCardsByBaseForm = (cards: FlashcardOld[]): FlashcardNew[] => {
+export const mergeCardsByBaseForm = (cards: (FlashcardOld | FlashcardNew)[]): FlashcardNew[] => {
   const merged = new Map<string, FlashcardNew>();
 
   cards.forEach(card => {
-    const baseForm = card.base_form || card.front || "";
+    const anyCard = card as Partial<FlashcardOld & FlashcardNew> & {
+      needsReprocessing?: boolean;
+    };
+    const baseForm = anyCard.base_form || (anyCard as FlashcardOld).front || "";
 
     if (!baseForm.trim()) {
       console.warn("Карточка без base_form пропущена:", card);
       return;
     }
 
-    // Создаем контекст из текущей карточки
-    const newContext: Context = {
-      original_phrase: card.original_phrase || "",
-      phrase_translation: card.phrase_translation || "",
-      text_forms: Array.isArray(card.text_forms) ? card.text_forms : [card.front || ""],
-    };
+    let contexts: Context[] = [];
+
+    if (Array.isArray((anyCard as FlashcardNew).contexts)) {
+      // Карточка уже нового формата
+      contexts = (anyCard as FlashcardNew).contexts.map(ctx => ({
+        original_phrase: ctx.original_phrase,
+        phrase_translation: ctx.phrase_translation,
+        text_forms: ctx.text_forms,
+        word_form_translations: ctx.word_form_translations || [],
+      }));
+    } else {
+      const textForms = Array.isArray((anyCard as FlashcardOld).text_forms)
+        ? (anyCard as FlashcardOld).text_forms
+        : [(anyCard as FlashcardOld).front || ""];
+      const formTranslations = (anyCard as FlashcardOld).word_form_translation
+        ? [(anyCard as FlashcardOld).word_form_translation]
+        : [];
+
+      const newContext: Context = {
+        original_phrase: (anyCard as FlashcardOld).original_phrase || "",
+        phrase_translation: (anyCard as FlashcardOld).phrase_translation || "",
+        text_forms: textForms,
+        word_form_translations: formTranslations,
+      };
+      contexts = [newContext];
+    }
 
     if (merged.has(baseForm)) {
-      // Добавляем контекст к существующей карточке
+      // Добавляем контекст(ы) к существующей карточке
       const existing = merged.get(baseForm)!;
 
-      // Проверяем, нет ли уже такого же контекста (избегаем дублирования)
-      const isDuplicate = existing.contexts.some(
-        ctx => ctx.original_phrase === newContext.original_phrase
-      );
+      contexts.forEach(ctx => {
+        const isDuplicate = existing.contexts.some(
+          ex => ex.original_phrase === ctx.original_phrase
+        );
+        if (!isDuplicate) {
+          existing.contexts.push(ctx);
+        }
+      });
 
-      if (!isDuplicate) {
-        existing.contexts.push(newContext);
+      if (anyCard.needsReprocessing) {
+        (
+          existing as FlashcardNew & {
+            needsReprocessing?: boolean;
+          }
+        ).needsReprocessing = true;
       }
     } else {
-      // Создаем новую карточку с первым контекстом
+      // Создаем новую карточку с контекстом(ами)
       merged.set(baseForm, {
         base_form: baseForm,
-        base_translation: card.base_translation || card.back || "",
-        contexts: [newContext],
-        visible: card.visible !== false,
+        base_translation: anyCard.base_translation || (anyCard as FlashcardOld).back || "",
+        contexts: [...contexts],
+        visible: anyCard.visible !== false,
+        ...(anyCard.needsReprocessing ? { needsReprocessing: true } : {}),
       });
     }
   });
@@ -89,29 +121,29 @@ export const saveFormTranslations = (
   const newFormTranslations = new Map(currentFormTranslations);
 
   cards.forEach(card => {
-    // Сохраняем перевод базовой формы (front → back)
-    if (card.front && card.back) {
+    // Сохраняем перевод базовой формы (front → word_form_translation)
+    if (card.front && card.word_form_translation) {
       const key = card.front
         .toLowerCase()
         .trim()
         .replace(/[.,!?;:]/g, "");
 
       if (key && !newFormTranslations.has(key)) {
-        newFormTranslations.set(key, card.back.trim());
-        console.log(`💾 Сохранен перевод формы: "${card.front}" → "${card.back}"`);
+        newFormTranslations.set(key, card.word_form_translation.trim());
+        console.log(`💾 Сохранен перевод формы: "${card.front}" → "${card.word_form_translation}"`);
       }
     }
 
     // Сохраняем переводы из text_forms если есть
-    if (Array.isArray(card.text_forms) && card.back) {
+    if (Array.isArray(card.text_forms) && card.word_form_translation) {
       card.text_forms.forEach(form => {
         const formKey = form
           .toLowerCase()
           .trim()
           .replace(/[.,!?;:]/g, "");
         if (formKey && !newFormTranslations.has(formKey)) {
-          newFormTranslations.set(formKey, card.back.trim());
-          console.log(`💾 Сохранен перевод text_form: "${form}" → "${card.back}"`);
+          newFormTranslations.set(formKey, card.word_form_translation.trim());
+          console.log(`💾 Сохранен перевод text_form: "${form}" → "${card.word_form_translation}"`);
         }
       });
     }
