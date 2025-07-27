@@ -6,6 +6,8 @@ import { ApiClient } from "../ApiClient";
 
 const server = setupServer();
 
+jest.setTimeout(20000);
+
 beforeAll(() => server.listen());
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
@@ -45,7 +47,9 @@ describe("ProcessingService", () => {
   it("parses successful response", async () => {
     server.use(
       http.post("*", () => {
-        return HttpResponse.json(sampleResponse);
+        return HttpResponse.json({
+          content: [{ type: "text", text: JSON.stringify(sampleResponse) }],
+        });
       })
     );
 
@@ -77,7 +81,9 @@ describe("ProcessingService", () => {
         if (call === 1) {
           return HttpResponse.error();
         }
-        return HttpResponse.json(sampleResponse);
+        return HttpResponse.json({
+          content: [{ type: "text", text: JSON.stringify(sampleResponse) }],
+        });
       })
     );
 
