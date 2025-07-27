@@ -1,7 +1,12 @@
 import React from "react";
-import type { FlashcardNew, AppMode, AppState, ProcessingProgress } from "../types";
+import type { FlashcardNew, FlashcardOld, AppMode, AppState, ProcessingProgress } from "../types";
 import { callClaude } from "../claude";
-import { textToCards, mergeCardsByBaseForm, splitIntoSentences } from "../utils/cardUtils";
+import {
+  normalizeCards,
+  mergeCardsByBaseForm,
+  saveFormTranslations,
+  splitIntoSentences,
+} from "../utils/cardUtils";
 
 // НОВЫЕ ИМПОРТЫ - интеграция с модульной архитектурой
 import { useRetryQueue } from "./useRetryQueue";
@@ -11,7 +16,11 @@ import { apiClient } from "../services/ApiClient";
 // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩУЮ КОНФИГУРАЦИЮ ПРОЕКТА
 import { defaultConfig } from "../config";
 
-export function useProcessing(inputText: string, setMode: (mode: AppMode) => void) {
+export function useProcessing(
+  inputText: string,
+  setMode: (mode: AppMode) => void,
+  setInputText?: (text: string) => void
+) {
   // Основные состояния приложения
   const [state, setState] = React.useState<AppState>("input");
   const [flashcards, setFlashcards] = React.useState<FlashcardNew[]>([]);
@@ -72,13 +81,8 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
   }, [retryQueue.enqueue]);
 
   // Функция сохранения переводов форм слов в глобальном состоянии
-  const saveFormTranslations = React.useCallback((cards: FlashcardNew[]) => {
-    cards.forEach(card => {
-      if (card.base_form && card.translations && card.translations.length > 0) {
-        const translation = card.translations[0];
-        setFormTranslations(prev => new Map(prev.set(card.base_form, translation)));
-      }
-    });
+  const saveForms = React.useCallback((cards: FlashcardOld[]) => {
+    setFormTranslations(prev => saveFormTranslations(cards, prev));
   }, []);
 
   // ОБНОВЛЕННАЯ функция обработки одного чанка с интеграцией новой архитектуры ошибок
@@ -235,19 +239,61 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
         const parsed = JSON.parse(cleanedText);
         const cardsArray = Array.isArray(parsed) ? parsed : [parsed];
 
-        const processedCards = cardsArray.map(card => ({
-          ...card,
-          id: card.id || `${Date.now()}_${Math.random()}`,
-          visible: true,
-          needsReprocessing: false, // Успешно обработано
-        }));
+        const oldCards = cardsArray.flatMap((card: any) => {
+          const baseForm = card.base_form || card.front || "";
+          const baseTrans = card.base_translation || card.translations?.[0] || "";
+          const textForms = Array.isArray(card.text_forms)
+            ? card.text_forms
+            : card.front
+              ? [card.front]
+              : [];
+          const formTrans =
+            card.word_form_translation ||
+            (Array.isArray(card.word_form_translations)
+              ? card.word_form_translations[0]
+              : undefined) ||
+            card.translations?.[0] ||
+            "";
+
+          if (!Array.isArray(card.contexts) || card.contexts.length === 0) {
+            return [
+              {
+                front: card.front || baseForm,
+                back: formTrans,
+                word_form_translation: formTrans,
+                base_form: baseForm,
+                base_translation: baseTrans,
+                original_phrase: chunk,
+                phrase_translation: "",
+                text_forms: textForms,
+                visible: true,
+              } as FlashcardOld,
+            ];
+          }
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return card.contexts.map((ctx: any) => ({
+            front: card.front || baseForm,
+            back: formTrans,
+            word_form_translation: formTrans,
+            base_form: baseForm,
+            base_translation: baseTrans,
+            original_phrase: ctx.latvian || "",
+            phrase_translation: ctx.russian || "",
+            text_forms: textForms,
+            visible: true,
+          })) as FlashcardOld[];
+        });
+
+        const normalizedCards = normalizeCards(oldCards, chunk);
+        const processedCards = mergeCardsByBaseForm(normalizedCards);
 
         console.log(
           `✅ Чанк ${chunkIndex + 1} успешно обработан: ${processedCards.length} карточек`
         );
 
         // Сохраняем переводы форм слов в глобальном состоянии
-        saveFormTranslations(processedCards);
+        saveForms(normalizedCards);
 
         return processedCards;
       } catch (error) {
@@ -279,7 +325,7 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
         return [errorCard];
       }
     },
-    [saveFormTranslations]
+    [saveForms]
   );
 
   // НОВОЕ: Функция обработки retry queue с прогрессом
@@ -307,8 +353,11 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
 
         if (results.cards && results.cards.length > 0) {
           results.cards.forEach(card => (card.visible = true));
-          const merged = mergeCardsByBaseForm([...flashcards, ...results.cards]);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const cleanedPrev = flashcards.filter(c => !(c as any).needsReprocessing);
+          const merged = mergeCardsByBaseForm([...cleanedPrev, ...results.cards]);
           setFlashcards(merged);
+          generateTranslation(merged);
           setMode("flashcards");
         }
 
@@ -326,8 +375,19 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
         setProcessingProgress({ current: 0, total: 0, step: "" });
       }
     },
-    [retryQueue.processQueue, flashcards, setFlashcards, setState, setMode]
+    [retryQueue.processQueue, flashcards, setFlashcards, setState, setMode, generateTranslation]
   );
+
+  const generateTranslation = React.useCallback((cards: FlashcardNew[]) => {
+    const translations = new Set<string>();
+    cards.forEach(card => {
+      card.contexts.forEach(ctx => {
+        const text = ctx.phrase_translation?.trim();
+        if (text) translations.add(text);
+      });
+    });
+    setTranslationText(Array.from(translations).join(" "));
+  }, []);
 
   // Основная функция обработки текста (чанк-за-чанком)
   const processText = React.useCallback(async () => {
@@ -368,7 +428,6 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
       });
 
       const allCards: FlashcardNew[] = [];
-      const translationParts: string[] = [];
 
       // Обрабатываем каждый чанк последовательно
       for (let i = 0; i < chunks.length; i++) {
@@ -384,12 +443,6 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
 
         if (chunkCards && chunkCards.length > 0) {
           allCards.push(...chunkCards);
-
-          // Генерируем перевод чанка из успешных карточек
-          const validCards = chunkCards.filter(card => !card.needsReprocessing);
-          if (validCards.length > 0 && validCards[0].contexts?.[0]?.russian) {
-            translationParts.push(validCards[0].contexts[0].russian);
-          }
         }
 
         // Задержка между запросами для соблюдения rate limits
@@ -405,7 +458,7 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
 
       // Устанавливаем финальные данные
       setFlashcards(mergedCards);
-      setTranslationText(translationParts.join(" "));
+      generateTranslation(mergedCards);
       setState("ready");
       setMode("flashcards");
     } catch (error) {
@@ -417,38 +470,53 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
         step: "Ошибка обработки",
       });
     }
-  }, [inputText, processChunkWithContext, setMode]);
+  }, [inputText, processChunkWithContext, setMode, generateTranslation]);
 
   // Функция обновления отдельной карточки
-  const updateCard = React.useCallback((id: string, updates: Partial<FlashcardNew>) => {
-    setFlashcards(prev => prev.map(card => (card.id === id ? { ...card, ...updates } : card)));
-    console.log(`📝 Обновлена карточка ${id}:`, updates);
-  }, []);
+  const updateCard = React.useCallback(
+    (
+      index: number,
+      field: string,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      value: any
+    ) => {
+      setFlashcards(prev => {
+        const copy = [...prev];
+        if (copy[index]) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (copy[index] as any)[field] = value;
+        }
+        return copy;
+      });
+    },
+    []
+  );
 
   // Функция переключения видимости карточки
-  const toggleCardVisibility = React.useCallback((id: string) => {
-    setFlashcards(prev =>
-      prev.map(card => (card.id === id ? { ...card, visible: !card.visible } : card))
-    );
-    console.log(`👁️ Переключена видимость карточки ${id}`);
+  const toggleCardVisibility = React.useCallback((index: number) => {
+    setFlashcards(prev => {
+      const copy = [...prev];
+      if (copy[index]) {
+        copy[index] = { ...copy[index], visible: !copy[index].visible };
+      }
+      return copy;
+    });
   }, []);
 
   // Функция удаления карточки
-  const deleteCard = React.useCallback((id: string) => {
-    setFlashcards(prev => prev.filter(card => card.id !== id));
-    console.log(`🗑️ Удалена карточка ${id}`);
+  const deleteCard = React.useCallback((index: number) => {
+    setFlashcards(prev => prev.filter((_, i) => i !== index));
   }, []);
 
   // Функция добавления новой карточки
-  const addNewCard = React.useCallback((newCard: Omit<FlashcardNew, "id">) => {
-    const cardWithId = {
-      ...newCard,
-      id: `new_${Date.now()}_${Math.random()}`,
+  const addNewCard = React.useCallback(() => {
+    const newCard: FlashcardNew = {
+      base_form: "",
+      base_translation: "",
+      contexts: [],
       visible: true,
-      needsReprocessing: false,
-    };
-    setFlashcards(prev => [...prev, cardWithId]);
-    console.log("➕ Добавлена новая карточка:", cardWithId.base_form);
+    } as FlashcardNew;
+    setFlashcards(prev => [newCard, ...prev]);
   }, []);
 
   // Функция полной очистки всех данных
@@ -461,9 +529,13 @@ export function useProcessing(inputText: string, setMode: (mode: AppMode) => voi
     setState("input");
     setProcessingProgress({ current: 0, total: 0, step: "" });
 
+    if (setInputText) {
+      setInputText("");
+    }
+
     // НОВОЕ: Очищаем retry queue при полной очистке
     retryQueue.clearQueue();
-  }, [retryQueue.clearQueue]);
+  }, [retryQueue.clearQueue, setInputText]);
 
   // Возвращаем все состояния и функции для использования в компонентах
   return {

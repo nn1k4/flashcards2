@@ -110,6 +110,7 @@ export const EditView: React.FC<EditViewProps> = ({
             <tbody className="divide-y divide-gray-200">
               {cards.map(card => {
                 const realIndex = flashcards.findIndex(originalCard => originalCard === card);
+                const isSystem = (card as any).needsReprocessing === true;
 
                 return (
                   <tr
@@ -119,13 +120,15 @@ export const EditView: React.FC<EditViewProps> = ({
                   >
                     {/* VISIBLE checkbox */}
                     <td className="px-3 py-4">
-                      <input
-                        type="checkbox"
-                        checked={card.visible !== false}
-                        onChange={e => onCardUpdate(realIndex, "visible", e.target.checked)}
-                        className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
-                        data-testid="visibility-checkbox"
-                      />
+                      {!isSystem && (
+                        <input
+                          type="checkbox"
+                          checked={card.visible !== false}
+                          onChange={e => onCardUpdate(realIndex, "visible", e.target.checked)}
+                          className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
+                          data-testid="visibility-checkbox"
+                        />
+                      )}
                     </td>
 
                     {/* BASE FORM */}
@@ -156,14 +159,16 @@ export const EditView: React.FC<EditViewProps> = ({
 
                     {/* ACTIONS */}
                     <td className="px-3 py-4 text-center">
-                      <button
-                        onClick={() => onDeleteCard(realIndex)}
-                        className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
-                        title="Удалить карточку"
-                        data-testid="delete-card-button"
-                      >
-                        🗑️
-                      </button>
+                      {!isSystem && (
+                        <button
+                          onClick={() => onDeleteCard(realIndex)}
+                          className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                          title="Удалить карточку"
+                          data-testid="delete-card-button"
+                        >
+                          🗑️
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

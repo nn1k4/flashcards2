@@ -305,7 +305,7 @@ function App() {
     // НОВЫЕ поля для retry
     processRetryQueue,
     retryQueue,
-  } = useProcessing(inputText, setMode);
+  } = useProcessing(inputText, setMode, setInputText);
 
   // Колбэки для навигации по карточкам
   const handleIndexChange = React.useCallback((idx: number) => {
@@ -317,10 +317,10 @@ function App() {
   }, []);
 
   const handleHideCard = React.useCallback(() => {
-    const visible = flashcards.filter(card => card.visible !== false);
-    const card = visible[Math.min(currentIndex, visible.length - 1)];
-    if (card) {
-      toggleCardVisibility(card.id);
+    const visible = flashcards.map((c, i) => ({ c, i })).filter(({ c }) => c.visible !== false);
+    const item = visible[Math.min(currentIndex, visible.length - 1)];
+    if (item) {
+      toggleCardVisibility(item.i);
     }
   }, [flashcards, currentIndex, toggleCardVisibility]);
 
