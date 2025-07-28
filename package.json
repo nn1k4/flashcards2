@@ -17,7 +17,9 @@
     "format:server": "prettier --write server/**/*.{ts,js,json}",
     "lint-and-format": "npm run format && npm run lint",
     "fix-all": "npm run format && npm run lint:fix",
-    "test": "jest"
+    "test": "jest",
+    "cypress:open": "cypress open",
+    "cypress:run": "cypress run"
   },
   "dependencies": {
     "lucide-react": "^0.292.0",
