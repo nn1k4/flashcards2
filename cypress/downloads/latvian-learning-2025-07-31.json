@@ -1,0 +1,39 @@
+{
+  "inputText": "Anna pamostas agri.",
+  "flashcards": [
+    {
+      "base_form": "Anna",
+      "base_translation": "Анна",
+      "contexts": [
+        {
+          "original_phrase": "Anna pamostas agri.",
+          "phrase_translation": "Анна встает рано.",
+          "text_forms": [
+            "Anna"
+          ],
+          "word_form_translations": []
+        }
+      ],
+      "visible": true
+    },
+    {
+      "base_form": "pamostas",
+      "base_translation": "встает",
+      "contexts": [
+        {
+          "original_phrase": "Anna pamostas agri.",
+          "phrase_translation": "Анна встает рано.",
+          "text_forms": [
+            "pamostas"
+          ],
+          "word_form_translations": []
+        }
+      ],
+      "visible": true
+    }
+  ],
+  "translationText": "Анна встает рано.",
+  "formTranslations": [],
+  "timestamp": "2025-07-31T13:52:52.931Z",
+  "version": "2.1"
+}
