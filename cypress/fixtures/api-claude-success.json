@@ -1,0 +1,8 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "[{\"base_form\":\"Anna\",\"base_translation\":\"Анна\",\"front\":\"Anna\",\"translations\":[\"Анна\"],\"text_forms\":[\"Anna\"],\"contexts\":[{\"latvian\":\"Anna pamostas agri.\",\"russian\":\"Анна встает рано.\",\"word_in_context\":\"Anna\"}]},{\"base_form\":\"pamostas\",\"base_translation\":\"встает\",\"front\":\"pamostas\",\"translations\":[\"встает\"],\"text_forms\":[\"pamostas\"],\"contexts\":[{\"latvian\":\"Anna pamostas agri.\",\"russian\":\"Анна встает рано.\",\"word_in_context\":\"pamostas\"}]}]"
+    }
+  ]
+}
