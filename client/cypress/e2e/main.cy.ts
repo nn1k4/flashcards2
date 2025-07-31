@@ -10,7 +10,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
   });
 
   it("1️⃣ Успешная обработка текста", () => {
-    cy.intercept("POST", "/proxy/claude", { fixture: "success.json" }).as("claude");
+    cy.intercept("POST", "**/api/claude", { fixture: "success.json" }).as("claude");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
@@ -19,7 +19,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
   });
 
   it("2️⃣ Ошибка сети при обработке", () => {
-    cy.intercept("POST", "/proxy/claude", { forceNetworkError: true }).as("claudeError");
+    cy.intercept("POST", "**/api/claude", { forceNetworkError: true }).as("claudeError");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claudeError");
@@ -28,18 +28,18 @@ describe("📘 E2E тесты приложения flashcards", () => {
   });
 
   it("3️⃣ Успешный Retry", () => {
-    cy.intercept("POST", "/proxy/claude", { forceNetworkError: true }).as("firstFail");
+    cy.intercept("POST", "**/api/claude", { forceNetworkError: true }).as("firstFail");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@firstFail");
-    cy.intercept("POST", "/proxy/claude", { fixture: "success.json" }).as("claudeRetry");
+    cy.intercept("POST", "**/api/claude", { fixture: "success.json" }).as("claudeRetry");
     cy.contains("Повторить").click();
     cy.wait("@claudeRetry");
     cy.get('[data-testid="flashcard"]').should("have.length.at.least", 2);
   });
 
   it("4️⃣ Удаление и добавление карточки", () => {
-    cy.intercept("POST", "/proxy/claude", { fixture: "success.json" }).as("claude");
+    cy.intercept("POST", "**/api/claude", { fixture: "success.json" }).as("claude");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
@@ -54,7 +54,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
   });
 
   it("5️⃣ Экспорт и импорт карточек", () => {
-    cy.intercept("POST", "/proxy/claude", { fixture: "success.json" }).as("claude");
+    cy.intercept("POST", "**/api/claude", { fixture: "success.json" }).as("claude");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
