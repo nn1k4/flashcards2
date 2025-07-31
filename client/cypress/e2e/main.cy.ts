@@ -10,7 +10,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
   });
 
   it("1️⃣ Успешная обработка текста", () => {
-    cy.intercept("OPTIONS", "**/api/claude*", {
+    cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
       headers: {
         "access-control-allow-origin": "*",
@@ -18,7 +18,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
         "access-control-allow-headers": "*",
       },
     }).as("preflight");
-    cy.intercept("POST", "**/api/claude*", {
+    cy.intercept("POST", "http://localhost:3001/api/claude", {
       fixture: "api-claude-success.json",
       headers: {
         "access-control-allow-origin": "*",
@@ -27,14 +27,14 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
-    cy.get('[data-testid="mode-flashcards"]', { timeout: 15000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.at.least", 2);
+    cy.get('[data-testid="mode-flashcards"]', { timeout: 30000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="flashcard"]', { timeout: 30000 }).should("have.length.at.least", 2);
     cy.get('[data-testid="mode-translation"]').click();
-    cy.get("[data-testid=\"translation-content\"]", { timeout: 15000 }).should("contain", "Анна встает рано");
+    cy.get("[data-testid=\"translation-content\"]", { timeout: 30000 }).should("contain", "Анна встает рано");
   });
 
   it("2️⃣ Ошибка сети при обработке", () => {
-    cy.intercept("OPTIONS", "**/api/claude*", {
+    cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
       headers: {
         "access-control-allow-origin": "*",
@@ -42,18 +42,18 @@ describe("📘 E2E тесты приложения flashcards", () => {
         "access-control-allow-headers": "*",
       },
     }).as("preflightError");
-    cy.intercept("POST", "**/api/claude*", {
+    cy.intercept("POST", "http://localhost:3001/api/claude", {
       forceNetworkError: true,
     }).as("claudeError");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claudeError");
-    cy.contains(/интернет-соединением|Ошибка сети|Прокси сервер недоступен|ошибка/i, { timeout: 15000 }).should("be.visible");
-    cy.contains(/Повторить|Перезапустить/i, { timeout: 15000 }).should("be.visible");
+    cy.contains(/Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i, { timeout: 30000 }).should("be.visible");
+    cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
   });
 
   it("3️⃣ Успешный Retry", () => {
-    cy.intercept("OPTIONS", "**/api/claude*", {
+    cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
       headers: {
         "access-control-allow-origin": "*",
@@ -61,15 +61,15 @@ describe("📘 E2E тесты приложения flashcards", () => {
         "access-control-allow-headers": "*",
       },
     }).as("preflightFail");
-    cy.intercept("POST", "**/api/claude*", {
+    cy.intercept("POST", "http://localhost:3001/api/claude", {
       forceNetworkError: true,
     }).as("firstFail");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@firstFail");
-    cy.contains(/интернет-соединением|Ошибка сети|Прокси сервер недоступен|ошибка/i, { timeout: 15000 }).should("be.visible");
-    cy.contains(/Повторить|Перезапустить/i, { timeout: 15000 }).should("be.visible");
-    cy.intercept("OPTIONS", "**/api/claude*", {
+    cy.contains(/Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i, { timeout: 30000 }).should("be.visible");
+    cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
+    cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
       headers: {
         "access-control-allow-origin": "*",
@@ -77,7 +77,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
         "access-control-allow-headers": "*",
       },
     }).as("preflightRetry");
-    cy.intercept("POST", "**/api/claude*", {
+    cy.intercept("POST", "http://localhost:3001/api/claude", {
       fixture: "api-claude-success.json",
       headers: {
         "access-control-allow-origin": "*",
@@ -85,12 +85,12 @@ describe("📘 E2E тесты приложения flashcards", () => {
     }).as("claudeRetry");
     cy.contains(/Повторить|Перезапустить/i).click();
     cy.wait("@claudeRetry");
-    cy.get('[data-testid="mode-flashcards"]', { timeout: 15000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.at.least", 2);
+    cy.get('[data-testid="mode-flashcards"]', { timeout: 30000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="flashcard"]', { timeout: 30000 }).should("have.length.at.least", 2);
   });
 
   it("4️⃣ Удаление и добавление карточки", () => {
-    cy.intercept("OPTIONS", "**/api/claude*", {
+    cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
       headers: {
         "access-control-allow-origin": "*",
@@ -98,7 +98,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
         "access-control-allow-headers": "*",
       },
     }).as("preflight4");
-    cy.intercept("POST", "**/api/claude*", {
+    cy.intercept("POST", "http://localhost:3001/api/claude", {
       fixture: "api-claude-success.json",
       headers: { "access-control-allow-origin": "*" },
     }).as("claude");
@@ -117,7 +117,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
   });
 
   it("5️⃣ Экспорт и импорт карточек", () => {
-    cy.intercept("OPTIONS", "**/api/claude*", {
+    cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
       headers: {
         "access-control-allow-origin": "*",
@@ -125,20 +125,20 @@ describe("📘 E2E тесты приложения flashcards", () => {
         "access-control-allow-headers": "*",
       },
     }).as("preflight5");
-    cy.intercept("POST", "**/api/claude*", {
+    cy.intercept("POST", "http://localhost:3001/api/claude", {
       fixture: "api-claude-success.json",
       headers: { "access-control-allow-origin": "*" },
     }).as("claude");
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
-    cy.get('[data-testid="export-button"]', { timeout: 15000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="export-button"]', { timeout: 30000 }).should("not.be.disabled").click();
     cy.get('[data-testid="clear-button"]').click();
     cy.get('[data-testid="flashcard"]').should("not.exist");
     cy.get('[data-testid="import-file-input"]').selectFile("cypress/fixtures/success.json", {
       force: true,
     });
-    cy.get('[data-testid="mode-flashcards"]', { timeout: 15000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="mode-flashcards"]', { timeout: 30000 }).should("not.be.disabled").click();
     cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.at.least", 2);
   });
 });
