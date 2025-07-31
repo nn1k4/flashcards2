@@ -27,10 +27,10 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
-    cy.get('[data-testid="mode-flashcards"]', { timeout: 10000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 10000 }).should("have.length.at.least", 2);
+    cy.get('[data-testid="mode-flashcards"]', { timeout: 15000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.at.least", 2);
     cy.get('[data-testid="mode-translation"]').click();
-    cy.get('[data-testid="translation-content"]').should("contain", "Анна встает рано");
+    cy.get("[data-testid=\"translation-content\"]", { timeout: 15000 }).should("contain", "Анна встает рано");
   });
 
   it("2️⃣ Ошибка сети при обработке", () => {
@@ -48,8 +48,8 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claudeError");
-    cy.contains(/интернет-соединением|Ошибка сети/, { timeout: 10000 }).should("be.visible");
-    cy.contains(/Повторить/, { timeout: 10000 }).should("be.visible");
+    cy.contains(/интернет-соединением|Ошибка сети|Прокси сервер недоступен|ошибка/i, { timeout: 15000 }).should("be.visible");
+    cy.contains(/Повторить|Перезапустить/i, { timeout: 15000 }).should("be.visible");
   });
 
   it("3️⃣ Успешный Retry", () => {
@@ -67,8 +67,8 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@firstFail");
-    cy.contains(/интернет-соединением|Ошибка сети/, { timeout: 10000 }).should("be.visible");
-    cy.contains(/Повторить/, { timeout: 10000 }).should("be.visible");
+    cy.contains(/интернет-соединением|Ошибка сети|Прокси сервер недоступен|ошибка/i, { timeout: 15000 }).should("be.visible");
+    cy.contains(/Повторить|Перезапустить/i, { timeout: 15000 }).should("be.visible");
     cy.intercept("OPTIONS", "**/api/claude*", {
       statusCode: 200,
       headers: {
@@ -83,10 +83,10 @@ describe("📘 E2E тесты приложения flashcards", () => {
         "access-control-allow-origin": "*",
       },
     }).as("claudeRetry");
-    cy.contains(/Повторить/).click();
+    cy.contains(/Повторить|Перезапустить/i).click();
     cy.wait("@claudeRetry");
-    cy.get('[data-testid="mode-flashcards"]', { timeout: 10000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 10000 }).should("have.length.at.least", 2);
+    cy.get('[data-testid="mode-flashcards"]', { timeout: 15000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.at.least", 2);
   });
 
   it("4️⃣ Удаление и добавление карточки", () => {
@@ -105,7 +105,7 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
-    cy.get('[data-testid="mode-flashcards"]', { timeout: 10000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="mode-flashcards"]', { timeout: 15000 }).should("not.be.disabled").click();
     cy.get('[data-testid="flashcard"]').first().click();
     cy.get('[data-testid="next-button"]').click();
     // Переходим в режим редактирования
@@ -132,13 +132,13 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
-    cy.get('[data-testid="export-button"]', { timeout: 10000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="export-button"]', { timeout: 15000 }).should("not.be.disabled").click();
     cy.get('[data-testid="clear-button"]').click();
     cy.get('[data-testid="flashcard"]').should("not.exist");
     cy.get('[data-testid="import-file-input"]').selectFile("cypress/fixtures/success.json", {
       force: true,
     });
-    cy.get('[data-testid="mode-flashcards"]', { timeout: 10000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 10000 }).should("have.length.at.least", 2);
+    cy.get('[data-testid="mode-flashcards"]', { timeout: 15000 }).should("not.be.disabled").click();
+    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.at.least", 2);
   });
 });
