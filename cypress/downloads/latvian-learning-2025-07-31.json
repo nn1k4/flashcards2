@@ -8,7 +8,9 @@
         {
           "original_phrase": "Anna pamostas agri.",
           "phrase_translation": "Анна встает рано.",
-          "text_forms": ["Anna"],
+          "text_forms": [
+            "Anna"
+          ],
           "word_form_translations": []
         }
       ],
@@ -21,7 +23,9 @@
         {
           "original_phrase": "Anna pamostas agri.",
           "phrase_translation": "Анна встает рано.",
-          "text_forms": ["pamostas"],
+          "text_forms": [
+            "pamostas"
+          ],
           "word_form_translations": []
         }
       ],
@@ -30,6 +34,6 @@
   ],
   "translationText": "Анна встает рано.",
   "formTranslations": [],
-  "timestamp": "2025-01-01T00:00:00.000Z",
+  "timestamp": "2025-07-31T13:25:06.082Z",
   "version": "2.1"
 }
