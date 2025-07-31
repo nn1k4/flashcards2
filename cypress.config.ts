@@ -5,5 +5,7 @@ export default defineConfig({
     specPattern: "client/cypress/e2e/**/*.cy.{js,jsx,ts,tsx}",
     supportFile: "client/cypress/support/e2e.ts",
     baseUrl: "http://localhost:5173",
+    chromeWebSecurity: false,
+    experimentalFetchPolyfill: true,
   },
 });
