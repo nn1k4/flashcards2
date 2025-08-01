@@ -414,7 +414,12 @@ function App() {
 
   // Добавьте useEffect для отслеживания ошибок:
   React.useEffect(() => {
-    if (processingProgress.step.includes("🔴") || processingProgress.step.includes("Ошибка")) {
+    if (
+      processingProgress.step &&
+      (processingProgress.step.includes("Ошибка") ||
+        processingProgress.step.startsWith("🔴") ||
+        processingProgress.step.startsWith("🌐"))
+    ) {
       setApiError(processingProgress.step);
     } else if (processingProgress.step === "ready") {
       setApiError(null);
@@ -444,6 +449,7 @@ function App() {
         flashcards={flashcards}
         retryQueue={retryQueue}
         onRetryProcessing={handleRetryProcessing}
+        error={apiError}
       />
       {/* Основное содержимое - условный рендеринг по режимам */}
       {mode === "text" && (
