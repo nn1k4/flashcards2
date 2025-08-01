@@ -97,6 +97,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
 
   return (
     <div
+      data-testid="api-status-bar"
       style={{
         background: "rgba(255,255,255,0.15)",
         padding: "16px",
@@ -413,7 +414,12 @@ function App() {
 
   // Добавьте useEffect для отслеживания ошибок:
   React.useEffect(() => {
-    if (processingProgress.step.includes("🔴") || processingProgress.step.includes("Ошибка")) {
+    if (
+      processingProgress.step &&
+      (processingProgress.step.includes("Ошибка") ||
+        processingProgress.step.startsWith("🔴") ||
+        processingProgress.step.startsWith("🌐"))
+    ) {
       setApiError(processingProgress.step);
     } else if (processingProgress.step === "ready") {
       setApiError(null);
@@ -443,6 +449,7 @@ function App() {
         flashcards={flashcards}
         retryQueue={retryQueue}
         onRetryProcessing={handleRetryProcessing}
+        error={apiError}
       />
       {/* Основное содержимое - условный рендеринг по режимам */}
       {mode === "text" && (
@@ -487,7 +494,7 @@ function App() {
         />
       )}
 
-      {/* Футер с уведомлениями и отладочной информацией */}
+      {/* TODO: Footer пока не используется для ошибок, все сообщения идут через APIStatusBar */}
       <Footer flashcards={flashcards} error={apiError} processingProgress={processingProgress} />
     </div>
   );
