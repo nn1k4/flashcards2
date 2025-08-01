@@ -410,19 +410,20 @@ function App() {
     }
   }, [processRetryQueue, retryInProgress, setCurrentIndex, setFlipped, setMode]);
 
-  const [apiError, setApiError] = React.useState(null);
+  // Типизируем состояние ошибки API
+  const [apiError, setApiError] = React.useState<string | null>(null);
 
   // Добавьте useEffect для отслеживания ошибок:
   React.useEffect(() => {
     const step = (processingProgress.step || "").trim();
     if (
       step.includes("Ошибка") ||
-      step.includes("error") ||
+      step.toLowerCase().includes("error") ||
       step.startsWith("🔴") ||
       step.startsWith("🌐")
     ) {
       setApiError(step);
-    } else if (step === "ready") {
+    } else if (step === "ready" || step === "") {
       setApiError(null);
     }
   }, [processingProgress.step]);
