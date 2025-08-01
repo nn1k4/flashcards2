@@ -28,9 +28,13 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claude");
     cy.get('[data-testid="mode-flashcards"]', { timeout: 30000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 30000 }).should("have.length.at.least", 2);
+    cy.get('[data-testid="flashcard"]', { timeout: 30000 }).should("have.length.greaterThan", 0);
+    cy.get('[data-testid="flashcard"]').should("have.length.at.least", 2);
     cy.get('[data-testid="mode-translation"]').click();
-    cy.get("[data-testid=\"translation-content\"]", { timeout: 30000 }).should("contain", "Анна встает рано");
+    cy.get('[data-testid="translation-content"]', { timeout: 30000 }).should(
+      "contain",
+      "Анна встает рано"
+    );
   });
 
   it("2️⃣ Ошибка сети при обработке", () => {
@@ -48,14 +52,10 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claudeError");
-<<<<<<< HEAD
-    cy.contains(/Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i, { timeout: 30000 }).should("be.visible");
-=======
-    cy.contains(
-      /Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен|Нет соединения|Нет соединения с интернетом|Произошла ошибка/i,
-      { timeout: 30000 }
-    ).should("be.visible");
->>>>>>> eaqjjn-codex/fix-cypress-tests-and-configurations
+    cy.get('[data-testid="api-status-bar"]', { timeout: 30000 }).should("be.visible");
+    cy.get('[data-testid="api-status-bar"]')
+      .contains(/Проблемы|Ошибка|Нет соединения/i)
+      .should("exist");
     cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
   });
 
@@ -74,14 +74,10 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@firstFail");
-<<<<<<< HEAD
-    cy.contains(/Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i, { timeout: 30000 }).should("be.visible");
-=======
-    cy.contains(
-      /Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен|Нет соединения|Нет соединения с интернетом|Произошла ошибка/i,
-      { timeout: 30000 }
-    ).should("be.visible");
->>>>>>> eaqjjn-codex/fix-cypress-tests-and-configurations
+    cy.get('[data-testid="api-status-bar"]', { timeout: 30000 }).should("be.visible");
+    cy.get('[data-testid="api-status-bar"]')
+      .contains(/Проблемы|Ошибка|Нет соединения/i)
+      .should("exist");
     cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
     cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
@@ -149,6 +145,9 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="export-button"]', { timeout: 30000 }).should("not.be.disabled").click();
     cy.get('[data-testid="clear-button"]').click();
     cy.get('[data-testid="flashcard"]').should("not.exist");
+    cy.on("window:alert", txt => {
+      expect(txt).to.match(/Imported \d+ flashcards/);
+    });
     cy.get('[data-testid="import-file-input"]').selectFile("cypress/fixtures/success.json", {
       force: true,
     });
