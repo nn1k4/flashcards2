@@ -19,7 +19,7 @@
     "fix-all": "npm run format && npm run lint:fix",
     "test": "jest",
     "cypress:open:only": "cypress open",
-    "cypress:run:only": "xvfb-run -a cypress run",
+    "cypress:run:only": "cypress run",
     "cypress:open": "start-server-and-test dev http://localhost:5173 cypress:open:only",
     "cypress:run": "start-server-and-test dev http://localhost:5173 cypress:run:only"
   },
