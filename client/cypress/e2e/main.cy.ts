@@ -48,7 +48,14 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claudeError");
+<<<<<<< HEAD
     cy.contains(/Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i, { timeout: 30000 }).should("be.visible");
+=======
+    cy.contains(
+      /Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен|Нет соединения|Нет соединения с интернетом|Произошла ошибка/i,
+      { timeout: 30000 }
+    ).should("be.visible");
+>>>>>>> eaqjjn-codex/fix-cypress-tests-and-configurations
     cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
   });
 
@@ -67,7 +74,14 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="text-input"]').type("Anna pamostas agri.");
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@firstFail");
+<<<<<<< HEAD
     cy.contains(/Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i, { timeout: 30000 }).should("be.visible");
+=======
+    cy.contains(
+      /Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен|Нет соединения|Нет соединения с интернетом|Произошла ошибка/i,
+      { timeout: 30000 }
+    ).should("be.visible");
+>>>>>>> eaqjjn-codex/fix-cypress-tests-and-configurations
     cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
     cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
