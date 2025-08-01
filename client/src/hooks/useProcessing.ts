@@ -15,6 +15,7 @@ import { apiClient } from "../services/ApiClient";
 // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩУЮ КОНФИГУРАЦИЮ ПРОЕКТА
 import { defaultConfig } from "../config";
 
+import { ErrorType } from "../utils/error-handler";
 interface ApiCardContext {
   latvian?: string;
   russian?: string;

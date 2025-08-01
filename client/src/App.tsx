@@ -410,23 +410,31 @@ function App() {
     }
   }, [processRetryQueue, retryInProgress, setCurrentIndex, setFlipped, setMode]);
 
-  // Типизируем состояние ошибки API
+  // Типизируем состояние: строка или null
   const [apiError, setApiError] = React.useState<string | null>(null);
 
-  // Добавьте useEffect для отслеживания ошибок:
+  // Следим за progress и состоянием очереди retry
   React.useEffect(() => {
     const step = (processingProgress.step || "").trim();
-    if (
+
+    // Явные ошибки по слову "Ошибка"/"error" или эмодзи, если они у вас используются
+    const hasExplicitError =
       step.includes("Ошибка") ||
       step.toLowerCase().includes("error") ||
       step.startsWith("🔴") ||
-      step.startsWith("🌐")
-    ) {
-      setApiError(step);
+      step.startsWith("🌐");
+
+    // Ошибки есть, если очередь retry содержит элементы
+    const hasProblems = retryQueue?.queue?.length > 0;
+
+    if (hasExplicitError || hasProblems) {
+      // Не назначайте пустую строку – достаточно передать любой непустой текст, чтобы статус‑бар отобразился
+      setApiError(step || "error");
     } else if (step === "ready" || step === "") {
+      // Сбрасываем ошибку, если процесс завершён или ничего не происходит
       setApiError(null);
     }
-  }, [processingProgress.step]);
+  }, [processingProgress.step, retryQueue?.queue]);
 
   return (
     <div

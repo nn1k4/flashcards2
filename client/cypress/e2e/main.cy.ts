@@ -151,9 +151,6 @@ describe("📘 E2E тесты приложения flashcards", () => {
       force: true,
     });
     cy.get('[data-testid="mode-flashcards"]', { timeout: 30000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should(
-      "have.length.greaterThan",
-      0
-    );
+    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.greaterThan", 0);
   });
 });
