@@ -414,14 +414,15 @@ function App() {
 
   // Добавьте useEffect для отслеживания ошибок:
   React.useEffect(() => {
+    const step = (processingProgress.step || "").trim();
     if (
-      processingProgress.step &&
-      (processingProgress.step.includes("Ошибка") ||
-        processingProgress.step.startsWith("🔴") ||
-        processingProgress.step.startsWith("🌐"))
+      step.includes("Ошибка") ||
+      step.includes("error") ||
+      step.startsWith("🔴") ||
+      step.startsWith("🌐")
     ) {
-      setApiError(processingProgress.step);
-    } else if (processingProgress.step === "ready") {
+      setApiError(step);
+    } else if (step === "ready") {
       setApiError(null);
     }
   }, [processingProgress.step]);

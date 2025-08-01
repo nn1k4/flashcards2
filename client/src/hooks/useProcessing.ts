@@ -69,8 +69,18 @@ export function useProcessing(
         chunkInfo: chunkInfo?.description || "unknown-chunk",
       });
 
-      // Если автоматический retry исчерпан и ошибка retryable, добавляем в очередь
-      if (!willRetry && errorInfo.retryable && chunkInfo?.originalChunk) {
+      // Если сеть недоступна или прокси выключен — сразу кладем в очередь,
+      // чтобы статус-бар отобразился до завершения автоматических повторов
+      if (
+        errorInfo.type === ErrorType.NETWORK_ERROR ||
+        errorInfo.type === ErrorType.PROXY_UNAVAILABLE
+      ) {
+        retryQueue.enqueue(
+          chunkInfo?.originalChunk || "",
+          errorInfo,
+          chunkInfo?.description || `chunk-${Date.now()}`
+        );
+      } else if (!willRetry && errorInfo.retryable && chunkInfo?.originalChunk) {
         console.log("➕ Добавляем в retry queue из-за исчерпания автоматических попыток");
         retryQueue.enqueue(
           chunkInfo.originalChunk,

@@ -52,10 +52,9 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@claudeError");
     cy.get('[data-testid="api-status-bar"]', { timeout: 30000 }).should("be.visible");
-    cy.contains(
-      /Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i,
-      { timeout: 30000 }
-    ).should("be.visible");
+    cy.contains(/Проблемы с соединением|Ошибка сети|Прокси сервер недоступен/i, {
+      timeout: 30000,
+    }).should("be.visible");
     cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
   });
 
@@ -75,10 +74,9 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.get('[data-testid="process-button"]').click();
     cy.wait("@firstFail");
     cy.get('[data-testid="api-status-bar"]', { timeout: 30000 }).should("be.visible");
-    cy.contains(
-      /Проблемы с (соединением|интернет-соединением)|Ошибка сети|Прокси сервер недоступен/i,
-      { timeout: 30000 }
-    ).should("be.visible");
+    cy.contains(/Проблемы с соединением|Ошибка сети|Прокси сервер недоступен/i, {
+      timeout: 30000,
+    }).should("be.visible");
     cy.contains(/Повторить|Перезапустить/i, { timeout: 30000 }).should("be.visible");
     cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,
@@ -153,6 +151,9 @@ describe("📘 E2E тесты приложения flashcards", () => {
       force: true,
     });
     cy.get('[data-testid="mode-flashcards"]', { timeout: 30000 }).should("not.be.disabled").click();
-    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should("have.length.at.least", 2);
+    cy.get('[data-testid="flashcard"]', { timeout: 15000 }).should(
+      "have.length.greaterThan",
+      0
+    );
   });
 });

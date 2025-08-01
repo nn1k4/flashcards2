@@ -263,6 +263,7 @@ export class ApiClient extends SimpleEventEmitter {
 
 // Глобальный экземпляр клиента для использования в приложении
 export const apiClient = new ApiClient({
+  maxRetries: process.env.NODE_ENV === "test" ? 1 : 5,
   debug: process.env.NODE_ENV === "development",
   enableEvents: true,
 });
