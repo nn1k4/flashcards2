@@ -97,6 +97,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
 
   return (
     <div
+      data-testid="api-status-bar"
       style={{
         background: "rgba(255,255,255,0.15)",
         padding: "16px",
@@ -487,7 +488,7 @@ function App() {
         />
       )}
 
-      {/* Футер с уведомлениями и отладочной информацией */}
+      {/* TODO: Footer пока не используется для ошибок, все сообщения идут через APIStatusBar */}
       <Footer flashcards={flashcards} error={apiError} processingProgress={processingProgress} />
     </div>
   );
