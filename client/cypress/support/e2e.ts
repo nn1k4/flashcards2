@@ -24,7 +24,7 @@ afterEach(() => {
   cy.window().then(win => {
     const logs = win.__browserLogs || [];
     if (logs.length) {
-      cy.task("logToFile", logs.join("\n")).catch(() => {});
+      cy.task("logToFile", logs.join("\n"));
     }
     win.__browserLogs = [];
   });
