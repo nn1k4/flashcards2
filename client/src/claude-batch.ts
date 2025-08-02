@@ -149,40 +149,27 @@ export async function pollBatchStatus(batchId: string): Promise<BatchStatusRespo
   throw new Error("Batch polling timeout");
 }
 
-// Получаем API ключ из переменных окружения
-const API_KEY = process.env.CLAUDE_API_KEY;
-export async function fetchBatchResults(resultsUrl: string): Promise<string[]> {
-  const response = await fetch(resultsUrl, {
-    headers: {
-      "x-api-key": API_KEY!,
-      "anthropic-version": "2023-06-01",
-    },
-  });
+export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]> {
+  const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}/results`);
+  if (!res.ok) throw new Error(`Failed to fetch batch results: ${res.status}`);
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch results: ${response.status}`);
-  }
+  const text = await res.text();
+  const lines = text.split("\n").filter(Boolean);
 
-  const resultsText = await response.text();
-  const lines = resultsText.trim().split("\n");
-
-  const texts: string[] = [];
-
+  const flashcards: FlashcardNew[] = [];
   for (const line of lines) {
     try {
-      const parsed = JSON.parse(line);
-      const content = parsed.message?.content;
-      if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block.type === "text" && typeof block.text === "string") {
-            texts.push(block.text.trim());
-          }
-        }
+      const entry = JSON.parse(line);
+      if (entry.result?.type === "succeeded") {
+        const rawText = entry.result.message?.content?.[0]?.text;
+        if (!rawText) continue;
+        const cards = JSON.parse(rawText);
+        flashcards.push(...cards);
       }
-    } catch (e) {
+    } catch (err) {
       console.warn("⚠️ Could not parse line:", line);
     }
   }
 
-  return texts;
+  return flashcards;
 }

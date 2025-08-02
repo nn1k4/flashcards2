@@ -321,6 +321,22 @@ app.get("/api/claude/batch/:id", async (req: Request, res: Response) => {
   }
 });
 
+app.get("/api/claude/batch/:id/results", async (req, res) => {
+  const id = req.params.id;
+  const anthropicRes = await fetch(`https://api.anthropic.com/v1/messages/batches/${id}/results`, {
+    headers: {
+      "x-api-key": API_KEY!,
+      "anthropic-version": "2023-06-01",
+    },
+  });
+  if (!anthropicRes.ok) {
+    return res.status(anthropicRes.status).send(await anthropicRes.text());
+  }
+  res.setHeader("Content-Type", "text/plain"); // .jsonl — plain text
+  const stream = anthropicRes.body;
+  stream.pipe(res);
+});
+
 // Маршрут для тестирования подключения к Claude API
 app.post("/api/claude/test", async (req: Request, res: Response) => {
   console.log("\n🧪 ===== INTERNAL API TEST =====");
