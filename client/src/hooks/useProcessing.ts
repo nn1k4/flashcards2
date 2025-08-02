@@ -11,6 +11,7 @@ import {
 import { useRetryQueue } from "./useRetryQueue";
 import { analyzeError, type ErrorInfo } from "../utils/error-handler";
 import { apiClient } from "../services/ApiClient";
+import { callClaudeBatch } from "../claude-batch";
 
 // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩУЮ КОНФИГУРАЦИЮ ПРОЕКТА
 import { defaultConfig } from "../config";
@@ -51,6 +52,8 @@ export function useProcessing(
     step: "",
   });
   const [formTranslations, setFormTranslations] = React.useState<Map<string, string>>(new Map());
+  const [isBatchEnabled, setBatchEnabled] = React.useState(false);
+  const [lastBatchId, setLastBatchId] = React.useState<string | null>(null);
 
   // НОВОЕ: Интеграция retry queue для персистентной обработки ошибок
   const retryQueue = useRetryQueue();
@@ -466,24 +469,51 @@ export function useProcessing(
 
       const allCards: FlashcardNew[] = [];
 
-      // Обрабатываем каждый чанк последовательно
-      for (let i = 0; i < chunks.length; i++) {
-        setProcessingProgress({
-          current: i + 1,
-          total: chunks.length,
-          step: `Обработка чанка ${i + 1} из ${chunks.length}`,
-        });
+      if (isBatchEnabled) {
+        setProcessingProgress({ current: 0, total: chunks.length, step: "Создание batch..." });
+        try {
+          const { batchId, outputs } = await callClaudeBatch(chunks);
+          setLastBatchId(batchId);
+          const history = JSON.parse(localStorage.getItem("batchHistory") || "[]");
+          history.unshift(batchId);
+          localStorage.setItem("batchHistory", JSON.stringify(history.slice(0, 20)));
 
-        console.log(`📦 Обрабатываем чанк ${i + 1}/${chunks.length}`);
-
-        const chunkCards = await processChunkWithContext(chunks[i], i, chunks.length, chunks);
-
-        if (chunkCards && chunkCards.length > 0) {
-          allCards.push(...chunkCards);
+          outputs.forEach(text => {
+            try {
+              const parsed: ApiCard[] = JSON.parse(text);
+              const normalized = normalizeCards(parsed as FlashcardOld[]);
+              saveForms(normalized);
+              allCards.push(...normalized);
+            } catch (e) {
+              console.error("Ошибка парсинга batch ответа:", e);
+            }
+          });
+        } catch (e) {
+          console.error("Batch processing failed:", e);
+          setState("input");
+          setProcessingProgress({ current: 0, total: 0, step: "Ошибка batch" });
+          return;
         }
+      } else {
+        // Обрабатываем каждый чанк последовательно
+        for (let i = 0; i < chunks.length; i++) {
+          setProcessingProgress({
+            current: i + 1,
+            total: chunks.length,
+            step: `Обработка чанка ${i + 1} из ${chunks.length}`,
+          });
 
-        // Задержка между запросами для соблюдения rate limits
-        await new Promise(resolve => setTimeout(resolve, 1000));
+          console.log(`📦 Обрабатываем чанк ${i + 1}/${chunks.length}`);
+
+          const chunkCards = await processChunkWithContext(chunks[i], i, chunks.length, chunks);
+
+          if (chunkCards && chunkCards.length > 0) {
+            allCards.push(...chunkCards);
+          }
+
+          // Задержка между запросами для соблюдения rate limits
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
 
       // Объединяем карточки с одинаковыми base_form
@@ -509,7 +539,7 @@ export function useProcessing(
         step: "Ошибка обработки",
       });
     }
-  }, [inputText, processChunkWithContext, setMode, generateTranslation]);
+  }, [inputText, processChunkWithContext, setMode, generateTranslation, isBatchEnabled, saveForms]);
 
   // Функция обновления отдельной карточки
   const updateCard = React.useCallback((index: number, field: string, value: unknown) => {
@@ -589,6 +619,11 @@ export function useProcessing(
     setTranslationText,
     setState,
     setFormTranslations,
+
+    // Batch режим
+    isBatchEnabled,
+    setBatchEnabled,
+    lastBatchId,
 
     // НОВОЕ: Retry функциональность для обработки ошибок
     processRetryQueue,

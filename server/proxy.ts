@@ -279,6 +279,43 @@ app.post("/api/claude", async (req: Request, res: Response) => {
   }
 });
 
+// Batch endpoints для пакетной обработки
+app.post("/api/claude/batch", async (req: Request, res: Response) => {
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages/batches", {
+      method: "POST",
+      headers: {
+        "x-api-key": API_KEY!,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(req.body),
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (error) {
+    console.error("Batch creation error:", error);
+    res.status(500).json({ error: "Batch request failed" });
+  }
+});
+
+app.get("/api/claude/batch/:id", async (req: Request, res: Response) => {
+  try {
+    const response = await fetch(`https://api.anthropic.com/v1/messages/batches/${req.params.id}`, {
+      method: "GET",
+      headers: {
+        "x-api-key": API_KEY!,
+        "anthropic-version": "2023-06-01",
+      },
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (error) {
+    console.error("Batch status error:", error);
+    res.status(500).json({ error: "Batch status failed" });
+  }
+});
+
 // Маршрут для тестирования подключения к Claude API
 app.post("/api/claude/test", async (req: Request, res: Response) => {
   console.log("\n🧪 ===== INTERNAL API TEST =====");

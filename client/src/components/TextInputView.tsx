@@ -1,5 +1,6 @@
 import React from "react";
 import type { AppState, ProcessingProgress, BaseComponentProps } from "../types";
+import BatchResultRetriever from "./BatchResultRetriever";
 
 // Интерфейс пропсов для TextInputView компонента
 interface TextInputViewProps extends BaseComponentProps {
@@ -8,6 +9,8 @@ interface TextInputViewProps extends BaseComponentProps {
   onProcessText: () => void; // функция запуска обработки
   state: AppState; // текущее состояние приложения
   processingProgress: ProcessingProgress; // прогресс обработки
+  isBatchEnabled: boolean;
+  setBatchEnabled: (value: boolean) => void;
 }
 
 // Компонент отображения загрузки с прогрессом
@@ -82,6 +85,8 @@ export const TextInputView: React.FC<TextInputViewProps> = ({
   onProcessText,
   state,
   processingProgress,
+  isBatchEnabled,
+  setBatchEnabled,
   className = "",
   "data-testid": testId,
 }) => {
@@ -134,8 +139,24 @@ export const TextInputView: React.FC<TextInputViewProps> = ({
         style={{ fontFamily: "Noto Sans Display, sans-serif" }}
         data-testid="process-button"
       >
-        Process (Chunk-by-Chunk)
+        {isBatchEnabled ? "Process (Batch)" : "Process (Chunk-by-Chunk)"}
       </button>
+
+      {/* Переключатель batch режима */}
+      <label
+        className="flex items-center mt-4 text-white"
+        style={{ fontFamily: "Noto Sans Display, sans-serif" }}
+      >
+        <input
+          type="checkbox"
+          checked={isBatchEnabled}
+          onChange={e => setBatchEnabled(e.target.checked)}
+          className="mr-2"
+        />
+        Использовать пакетную обработку
+      </label>
+
+      <BatchResultRetriever />
     </div>
   );
 };
