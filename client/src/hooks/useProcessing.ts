@@ -54,6 +54,7 @@ export function useProcessing(
   const [formTranslations, setFormTranslations] = React.useState<Map<string, string>>(new Map());
   const [isBatchEnabled, setBatchEnabled] = React.useState(false);
   const [batchId, setBatchId] = React.useState<string | null>(null);
+  const [batchError, setBatchError] = React.useState<Error | null>(null);
 
   // НОВОЕ: Интеграция retry queue для персистентной обработки ошибок
   const retryQueue = useRetryQueue();
@@ -444,6 +445,7 @@ export function useProcessing(
     setTranslationText("");
     setFormTranslations(new Map());
     setBatchId(null);
+    setBatchError(null);
 
     try {
       // Разбиваем текст на предложения
@@ -496,25 +498,10 @@ export function useProcessing(
             }
           });
         } catch (e) {
-          console.error("⚠️ Batch processing failed, fallback to chunk mode", e);
-          for (let i = 0; i < chunks.length; i++) {
-            setProcessingProgress({
-              current: i + 1,
-              total: chunks.length,
-              step: `Обработка чанка ${i + 1} из ${chunks.length}`,
-            });
-
-            try {
-              const chunkCards = await processChunkWithContext(chunks[i], i, chunks.length, chunks);
-              if (chunkCards && chunkCards.length > 0) {
-                allCards.push(...chunkCards);
-              }
-            } catch (chunkErr) {
-              console.error("Ошибка обработки чанка в fallback режиме:", chunkErr);
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+          console.error("❌ Batch processing failed:", e);
+          setBatchError(e as Error);
+          setState("input");
+          return;
         }
       } else {
         // Обрабатываем каждый чанк последовательно
@@ -646,6 +633,7 @@ export function useProcessing(
     isBatchEnabled,
     setBatchEnabled,
     batchId,
+    batchError,
 
     // НОВОЕ: Retry функциональность для обработки ошибок
     processRetryQueue,

@@ -11,6 +11,7 @@ interface TextInputViewProps extends BaseComponentProps {
   isBatchEnabled: boolean;
   setBatchEnabled: (value: boolean) => void;
   batchId: string | null;
+  batchError: Error | null;
 }
 
 // Компонент отображения загрузки с прогрессом
@@ -88,6 +89,7 @@ export const TextInputView: React.FC<TextInputViewProps> = ({
   isBatchEnabled,
   setBatchEnabled,
   batchId,
+  batchError,
   className = "",
   "data-testid": testId,
 }) => {
@@ -160,6 +162,11 @@ export const TextInputView: React.FC<TextInputViewProps> = ({
         <div style={{ fontSize: "14px", marginTop: "10px", color: "#444" }}>
           🆔 ID текущего batch: <code>{batchId}</code>{" "}
           <button onClick={() => navigator.clipboard.writeText(batchId)}>📋 Копировать</button>
+        </div>
+      )}
+      {batchError && (
+        <div style={{ marginTop: "10px", color: "red", fontSize: "14px" }}>
+          ⚠️ Ошибка пакетной обработки: {batchError.message}
         </div>
       )}
     </div>

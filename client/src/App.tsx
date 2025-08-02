@@ -312,6 +312,7 @@ function App() {
     isBatchEnabled,
     setBatchEnabled,
     batchId,
+    batchError,
   } = useProcessing(inputText, setMode, setInputText, setCurrentIndex, setFlipped);
 
   // Колбэки для навигации по карточкам
@@ -477,6 +478,7 @@ function App() {
             isBatchEnabled={isBatchEnabled}
             setBatchEnabled={setBatchEnabled}
             batchId={batchId}
+            batchError={batchError}
           />
           <BatchResultRetriever
             onResults={cards => {

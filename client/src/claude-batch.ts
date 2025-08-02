@@ -108,7 +108,7 @@ export async function callClaudeBatch(
     },
   }));
 
-  const res = await fetch("/api/claude/batch", {
+  const res = await fetch("http://localhost:3001/api/claude/batch", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ requests }),
@@ -119,6 +119,7 @@ export async function callClaudeBatch(
   }
 
   const data = (await res.json()) as BatchCreateResponse;
+  console.log("✅ Batch created, id:", data.id);
   const outputs = await pollBatchStatus(data.id);
   const texts = outputs.map(o => o?.message?.content?.[0]?.text || "");
   return { batchId: data.id, outputs: texts };
@@ -128,21 +129,26 @@ export async function pollBatchStatus(batchId: string): Promise<BatchStatusRespo
   const maxAttempts = 20;
   const interval = 5000;
   for (let i = 0; i < maxAttempts; i++) {
-    console.log(`📡 Polling batch (attempt ${i + 1}/${maxAttempts})...`);
-    const res = await fetch(`/api/claude/batch/${batchId}`);
+    console.log(`📡 Polling batch status (attempt ${i + 1}/${maxAttempts})...`);
+    const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`);
     console.log("🔍 Poll response status:", res.status);
     if (!res.ok) {
       throw new Error(`Failed to get batch status: ${res.status}`);
     }
     const data = (await res.json()) as BatchStatusResponse;
     console.log("📦 Poll data:", data);
-    if (data.status === "completed") {
+    if (["completed", "ended"].includes(data.status)) {
       return data.outputs || [];
     }
     if (data.status === "failed") {
       throw new Error("Batch failed");
     }
-    await new Promise(r => setTimeout(r, interval));
+
+    if (data.status === "failed") {
+      throw new Error("Batch failed");
+    }
+    const backoff = (attempt: number) => 1000 * Math.pow(1.5, attempt);
+    await new Promise(r => setTimeout(r, backoff(i)));
   }
   throw new Error("Batch polling timeout");
 }
