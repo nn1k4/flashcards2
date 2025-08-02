@@ -149,7 +149,40 @@ export async function pollBatchStatus(batchId: string): Promise<BatchStatusRespo
   throw new Error("Batch polling timeout");
 }
 
-export async function fetchBatchResults(batchId: string): Promise<string[]> {
-  const outputs = await pollBatchStatus(batchId);
-  return outputs.map(o => o?.message?.content?.[0]?.text || "");
+// Получаем API ключ из переменных окружения
+const API_KEY = process.env.CLAUDE_API_KEY;
+export async function fetchBatchResults(resultsUrl: string): Promise<string[]> {
+  const response = await fetch(resultsUrl, {
+    headers: {
+      "x-api-key": API_KEY!,
+      "anthropic-version": "2023-06-01",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch results: ${response.status}`);
+  }
+
+  const resultsText = await response.text();
+  const lines = resultsText.trim().split("\n");
+
+  const texts: string[] = [];
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      const content = parsed.message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "text" && typeof block.text === "string") {
+            texts.push(block.text.trim());
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("⚠️ Could not parse line:", line);
+    }
+  }
+
+  return texts;
 }
