@@ -85,7 +85,7 @@ interface BatchCreateResponse {
 }
 
 interface BatchStatusResponse {
-  status: string;
+  processing_status: string;
   outputs?: { message?: { content?: { text: string }[] } }[];
 }
 
@@ -137,14 +137,10 @@ export async function pollBatchStatus(batchId: string): Promise<BatchStatusRespo
     }
     const data = (await res.json()) as BatchStatusResponse;
     console.log("📦 Poll data:", data);
-    if (["completed", "ended"].includes(data.status)) {
+    if (data.processing_status === "ended") {
       return data.outputs || [];
     }
-    if (data.status === "failed") {
-      throw new Error("Batch failed");
-    }
-
-    if (data.status === "failed") {
+    if (data.processing_status === "failed") {
       throw new Error("Batch failed");
     }
     const backoff = (attempt: number) => 1000 * Math.pow(1.5, attempt);
