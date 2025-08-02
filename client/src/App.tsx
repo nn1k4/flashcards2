@@ -308,6 +308,8 @@ function App() {
     // НОВЫЕ поля для retry
     processRetryQueue,
     retryQueue,
+    isBatchEnabled,
+    setBatchEnabled,
   } = useProcessing(inputText, setMode, setInputText, setCurrentIndex, setFlipped);
 
   // Колбэки для навигации по карточкам
@@ -469,6 +471,8 @@ function App() {
           onProcessText={processText}
           state={state}
           processingProgress={processingProgress}
+          isBatchEnabled={isBatchEnabled}
+          setBatchEnabled={setBatchEnabled}
         />
       )}
 
