@@ -281,6 +281,7 @@ app.post("/api/claude", async (req: Request, res: Response) => {
 
 // Batch endpoints для пакетной обработки
 app.post("/api/claude/batch", async (req: Request, res: Response) => {
+  console.log("🛰️ POST /api/claude/batch", JSON.stringify(req.body, null, 2));
   try {
     const anthropicRes = await fetch("https://api.anthropic.com/v1/messages/batches", {
       method: "POST",
@@ -300,6 +301,7 @@ app.post("/api/claude/batch", async (req: Request, res: Response) => {
 });
 
 app.get("/api/claude/batch/:id", async (req: Request, res: Response) => {
+  console.log(`🔍 GET /api/claude/batch/${req.params.id}`);
   try {
     const anthropicRes = await fetch(
       `https://api.anthropic.com/v1/messages/batches/${req.params.id}`,

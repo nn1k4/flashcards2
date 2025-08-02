@@ -137,13 +137,18 @@ export async function pollBatchStatus(batchId: string): Promise<BatchStatusRespo
     }
     const data = (await res.json()) as BatchStatusResponse;
     console.log("📦 Poll data:", data);
-    if (data.status === "completed") {
+    if (["completed", "ended"].includes(data.status)) {
       return data.outputs || [];
     }
     if (data.status === "failed") {
       throw new Error("Batch failed");
     }
-    await new Promise(r => setTimeout(r, interval));
+
+    if (data.status === "failed") {
+      throw new Error("Batch failed");
+    }
+    const backoff = (attempt: number) => 1000 * Math.pow(1.5, attempt);
+    await new Promise(r => setTimeout(r, backoff(i)));
   }
   throw new Error("Batch polling timeout");
 }
