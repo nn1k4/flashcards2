@@ -1,6 +1,5 @@
 import React from "react";
 import type { AppState, ProcessingProgress, BaseComponentProps } from "../types";
-import BatchResultRetriever from "./BatchResultRetriever";
 
 // Интерфейс пропсов для TextInputView компонента
 interface TextInputViewProps extends BaseComponentProps {
@@ -11,6 +10,7 @@ interface TextInputViewProps extends BaseComponentProps {
   processingProgress: ProcessingProgress; // прогресс обработки
   isBatchEnabled: boolean;
   setBatchEnabled: (value: boolean) => void;
+  batchId: string | null;
 }
 
 // Компонент отображения загрузки с прогрессом
@@ -87,6 +87,7 @@ export const TextInputView: React.FC<TextInputViewProps> = ({
   processingProgress,
   isBatchEnabled,
   setBatchEnabled,
+  batchId,
   className = "",
   "data-testid": testId,
 }) => {
@@ -155,8 +156,12 @@ export const TextInputView: React.FC<TextInputViewProps> = ({
         />
         Использовать пакетную обработку
       </label>
-
-      <BatchResultRetriever />
+      {batchId && (
+        <div style={{ fontSize: "14px", marginTop: "10px", color: "#444" }}>
+          🆔 ID текущего batch: <code>{batchId}</code>{" "}
+          <button onClick={() => navigator.clipboard.writeText(batchId)}>📋 Копировать</button>
+        </div>
+      )}
     </div>
   );
 };

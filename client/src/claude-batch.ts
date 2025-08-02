@@ -108,7 +108,7 @@ export async function callClaudeBatch(
     },
   }));
 
-  const res = await fetch("http://localhost:3001/api/claude/batch", {
+  const res = await fetch("/api/claude/batch", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ requests }),
@@ -128,11 +128,14 @@ export async function pollBatchStatus(batchId: string): Promise<BatchStatusRespo
   const maxAttempts = 20;
   const interval = 5000;
   for (let i = 0; i < maxAttempts; i++) {
-    const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`);
+    console.log(`📡 Polling batch (attempt ${i + 1}/${maxAttempts})...`);
+    const res = await fetch(`/api/claude/batch/${batchId}`);
+    console.log("🔍 Poll response status:", res.status);
     if (!res.ok) {
       throw new Error(`Failed to get batch status: ${res.status}`);
     }
     const data = (await res.json()) as BatchStatusResponse;
+    console.log("📦 Poll data:", data);
     if (data.status === "completed") {
       return data.outputs || [];
     }

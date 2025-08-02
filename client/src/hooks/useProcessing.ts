@@ -53,7 +53,7 @@ export function useProcessing(
   });
   const [formTranslations, setFormTranslations] = React.useState<Map<string, string>>(new Map());
   const [isBatchEnabled, setBatchEnabled] = React.useState(false);
-  const [lastBatchId, setLastBatchId] = React.useState<string | null>(null);
+  const [batchId, setBatchId] = React.useState<string | null>(null);
 
   // НОВОЕ: Интеграция retry queue для персистентной обработки ошибок
   const retryQueue = useRetryQueue();
@@ -443,6 +443,7 @@ export function useProcessing(
     setFlashcards([]);
     setTranslationText("");
     setFormTranslations(new Map());
+    setBatchId(null);
 
     try {
       // Разбиваем текст на предложения
@@ -461,6 +462,12 @@ export function useProcessing(
 
       console.log(`📦 Создано ${chunks.length} чанков для обработки`);
 
+      if (isBatchEnabled && chunks.length > 1000) {
+        alert("❗️Слишком много предложений для пакетной обработки. Пожалуйста, сократите текст.");
+        setState("input");
+        return;
+      }
+
       setProcessingProgress({
         current: 0,
         total: chunks.length,
@@ -472,10 +479,10 @@ export function useProcessing(
       if (isBatchEnabled) {
         setProcessingProgress({ current: 0, total: chunks.length, step: "Создание batch..." });
         try {
-          const { batchId, outputs } = await callClaudeBatch(chunks);
-          setLastBatchId(batchId);
+          const { batchId: createdBatchId, outputs } = await callClaudeBatch(chunks);
+          setBatchId(createdBatchId);
           const history = JSON.parse(localStorage.getItem("batchHistory") || "[]");
-          history.unshift(batchId);
+          history.unshift(createdBatchId);
           localStorage.setItem("batchHistory", JSON.stringify(history.slice(0, 20)));
 
           outputs.forEach(text => {
@@ -489,10 +496,25 @@ export function useProcessing(
             }
           });
         } catch (e) {
-          console.error("Batch processing failed:", e);
-          setState("input");
-          setProcessingProgress({ current: 0, total: 0, step: "Ошибка batch" });
-          return;
+          console.error("⚠️ Batch processing failed, fallback to chunk mode", e);
+          for (let i = 0; i < chunks.length; i++) {
+            setProcessingProgress({
+              current: i + 1,
+              total: chunks.length,
+              step: `Обработка чанка ${i + 1} из ${chunks.length}`,
+            });
+
+            try {
+              const chunkCards = await processChunkWithContext(chunks[i], i, chunks.length, chunks);
+              if (chunkCards && chunkCards.length > 0) {
+                allCards.push(...chunkCards);
+              }
+            } catch (chunkErr) {
+              console.error("Ошибка обработки чанка в fallback режиме:", chunkErr);
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
       } else {
         // Обрабатываем каждый чанк последовательно
@@ -623,7 +645,7 @@ export function useProcessing(
     // Batch режим
     isBatchEnabled,
     setBatchEnabled,
-    lastBatchId,
+    batchId,
 
     // НОВОЕ: Retry функциональность для обработки ошибок
     processRetryQueue,

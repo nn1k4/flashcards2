@@ -1,7 +1,25 @@
 import React from "react";
 import { fetchBatchResults } from "../claude-batch";
+import type { FlashcardNew, FlashcardOld } from "../types";
+import { normalizeCards } from "../utils/cardUtils";
 
-const BatchResultRetriever: React.FC = () => {
+interface BatchResultRetrieverProps {
+  onResults?: (cards: FlashcardNew[]) => void;
+}
+
+interface ApiCard {
+  id?: string;
+  base_form?: string;
+  front?: string;
+  base_translation?: string;
+  translations?: string[];
+  text_forms?: string[];
+  word_form_translation?: string;
+  word_form_translations?: string[];
+  contexts?: { latvian?: string; russian?: string; word_in_context?: string }[];
+}
+
+const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({ onResults }) => {
   const [batchId, setBatchId] = React.useState("");
   const [status, setStatus] = React.useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = React.useState<string>("");
@@ -11,7 +29,18 @@ const BatchResultRetriever: React.FC = () => {
     setStatus("loading");
     try {
       const outputs = await fetchBatchResults(batchId.trim());
-      setResult(outputs.join("\n"));
+      const cards: FlashcardNew[] = [];
+      outputs.forEach(text => {
+        try {
+          const parsed: ApiCard[] = JSON.parse(text);
+          const normalized = normalizeCards(parsed as FlashcardOld[]);
+          cards.push(...normalized);
+        } catch (e) {
+          console.error("Ошибка парсинга batch ответа:", e);
+        }
+      });
+      setResult(JSON.stringify(cards, null, 2));
+      onResults?.(cards);
       setStatus("done");
     } catch (e) {
       console.error(e);
