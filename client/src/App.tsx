@@ -10,6 +10,7 @@ import FlashcardsView from "./components/FlashcardsView";
 import ReadingView from "./components/ReadingView";
 import TranslationView from "./components/TranslationView";
 import EditView from "./components/EditView";
+import BatchResultRetriever from "./components/BatchResultRetriever";
 
 // Импорт всех кастомных хуков (существующая архитектура)
 import { useProcessing } from "./hooks/useProcessing";
@@ -308,6 +309,10 @@ function App() {
     // НОВЫЕ поля для retry
     processRetryQueue,
     retryQueue,
+    isBatchEnabled,
+    setBatchEnabled,
+    batchId,
+    batchError,
   } = useProcessing(inputText, setMode, setInputText, setCurrentIndex, setFlipped);
 
   // Колбэки для навигации по карточкам
@@ -463,13 +468,25 @@ function App() {
       />
       {/* Основное содержимое - условный рендеринг по режимам */}
       {mode === "text" && (
-        <TextInputView
-          inputText={inputText}
-          setInputText={setInputText}
-          onProcessText={processText}
-          state={state}
-          processingProgress={processingProgress}
-        />
+        <>
+          <TextInputView
+            inputText={inputText}
+            setInputText={setInputText}
+            onProcessText={processText}
+            state={state}
+            processingProgress={processingProgress}
+            isBatchEnabled={isBatchEnabled}
+            setBatchEnabled={setBatchEnabled}
+            batchId={batchId}
+            batchError={batchError}
+          />
+          <BatchResultRetriever
+            onResults={cards => {
+              setFlashcards(cards);
+              setMode("flashcards");
+            }}
+          />
+        </>
       )}
 
       {mode === "flashcards" && (
