@@ -9,6 +9,23 @@ describe("📘 E2E тесты приложения flashcards", () => {
     cy.visit(url);
   });
 
+  afterEach(() => {
+    cy.get("body").then(() => {
+      const summary = {
+        timestamp: new Date().toISOString(),
+        input: "Anna pamostas agri.",
+        translation: Cypress.$('[data-testid="translation-content"]').text(),
+        hasError: Cypress.$('[data-testid="api-status-bar"]').length > 0,
+        cardsGenerated: Cypress.$('[data-testid="flashcard"]').length,
+        mode:
+          Cypress.$('[data-testid="mode-flashcards"]').attr("aria-selected") === "true"
+            ? "flashcards"
+            : "unknown",
+      };
+      return cy.task("saveSummary", summary);
+    });
+  });
+
   it("1️⃣ Успешная обработка текста", () => {
     cy.intercept("OPTIONS", "http://localhost:3001/api/claude", {
       statusCode: 200,

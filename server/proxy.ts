@@ -3,6 +3,7 @@ import cors from "cors";
 import fetch from "node-fetch";
 import dotenv from "dotenv";
 import path from "path";
+import fs from "fs";
 
 const INTERNAL_TEST_CONFIG = {
   model: "claude-3-haiku-20240307",
@@ -50,6 +51,19 @@ interface ErrorResponse {
 dotenv.config({ path: path.join(__dirname, ".env") });
 
 const app = express();
+
+const logsDir = path.join(__dirname, "../client/cypress/logs");
+if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+const serverLogPath = path.join(
+  logsDir,
+  `server_log_${new Date().toISOString().replace(/[:.]/g, "_")}.txt`
+);
+const serverLogStream = fs.createWriteStream(serverLogPath, { flags: "a" });
+const originalConsoleLog = console.log;
+console.log = (...args: unknown[]) => {
+  originalConsoleLog(...args);
+  serverLogStream.write(args.map(String).join(" ") + "\n");
+};
 
 // Middleware
 app.use(
