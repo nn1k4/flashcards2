@@ -91,9 +91,7 @@ interface BatchStatusResponse {
   outputs?: { message?: { content?: { text: string }[] } }[];
 }
 
-export async function callClaudeBatch(
-  chunks: string[]
-): Promise<{ batchId: string; outputs: string[] }> {
+export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: string }> {
   const claudeConfig = getClaudeConfig("textProcessing");
   const requests = chunks.map((chunk, i) => ({
     custom_id: `chunk-${i}`,
@@ -122,9 +120,8 @@ export async function callClaudeBatch(
 
   const data = (await res.json()) as BatchCreateResponse;
   console.log("✅ Batch created, id:", data.id);
-  const outputs = await pollBatchStatus(data.id);
-  const texts = outputs.map(o => o?.message?.content?.[0]?.text || "");
-  return { batchId: data.id, outputs: texts };
+
+  return { batchId: data.id }; // 💡 теперь возвращаем ТОЛЬКО batchId
 }
 
 export async function pollBatchStatus(batchId: string): Promise<BatchStatusResponse["outputs"]> {
@@ -158,11 +155,12 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
   const text = await res.text();
   const lines = text.split("\n").filter(Boolean);
 
-  const flashcards: FlashcardNew[] = [];
+  const entries: { id: string; cards: FlashcardNew[] }[] = [];
 
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
+      const id = entry?.custom_id || entry?.id || "";
       const content = entry?.result?.message?.content;
       const textItem = content?.find((c: { type: string }) => c.type === "text");
       const textPayload = textItem?.text;
@@ -170,13 +168,8 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
       if (!textPayload) continue;
 
       const parsedCards: FlashcardOld[] =
-        typeof textPayload === "string"
-          ? JSON.parse(textPayload)
-          : Array.isArray(textPayload)
-            ? textPayload
-            : [];
+        typeof textPayload === "string" ? JSON.parse(textPayload) : [];
 
-      // Удаляем пустые и сортируем формы
       const cleaned = parsedCards
         .filter(c => c && c.front && c.back)
         .map(c => {
@@ -186,12 +179,10 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
           return c;
         });
 
-      // Уникальные карточки по base_form + original_phrase + phrase_translation
       const keyGen = (c: FlashcardOld) =>
         `${c.base_form?.trim().toLowerCase()}__${c.original_phrase?.trim().toLowerCase()}__${c.phrase_translation?.trim().toLowerCase()}`;
 
       const seen = new Map<string, FlashcardNew>();
-
       for (const card of cleaned) {
         const key = keyGen(card);
         if (!seen.has(key)) {
@@ -213,12 +204,19 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
         }
       }
 
-      flashcards.push(...seen.values());
+      entries.push({ id, cards: Array.from(seen.values()) });
     } catch (e) {
       console.warn("⚠️ Could not parse line:", line);
       console.error("Ошибка парсинга batch ответа:", e);
     }
   }
 
-  return flashcards;
+  // 🔁 Сортировка по custom_id — chunk-0, chunk-1, ...
+  entries.sort((a, b) => {
+    const aIndex = parseInt(a.id.replace("chunk-", ""), 10);
+    const bIndex = parseInt(b.id.replace("chunk-", ""), 10);
+    return aIndex - bIndex;
+  });
+
+  return entries.flatMap(e => e.cards);
 }

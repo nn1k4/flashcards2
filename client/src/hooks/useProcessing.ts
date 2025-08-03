@@ -11,12 +11,13 @@ import {
 import { useRetryQueue } from "./useRetryQueue";
 import { analyzeError, type ErrorInfo } from "../utils/error-handler";
 import { apiClient } from "../services/ApiClient";
-import { callClaudeBatch } from "../claude-batch";
+import { callClaudeBatch, fetchBatchResults } from "../claude-batch";
 
 // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩУЮ КОНФИГУРАЦИЮ ПРОЕКТА
 import { defaultConfig } from "../config";
 
 import { ErrorType } from "../utils/error-handler";
+
 interface ApiCardContext {
   latvian?: string;
   russian?: string;
@@ -481,22 +482,19 @@ export function useProcessing(
       if (isBatchEnabled) {
         setProcessingProgress({ current: 0, total: chunks.length, step: "Создание batch..." });
         try {
-          const { batchId: createdBatchId, outputs } = await callClaudeBatch(chunks);
+          const { batchId: createdBatchId } = await callClaudeBatch(chunks);
           setBatchId(createdBatchId);
+
           const history = JSON.parse(localStorage.getItem("batchHistory") || "[]");
           history.unshift(createdBatchId);
           localStorage.setItem("batchHistory", JSON.stringify(history.slice(0, 20)));
 
-          outputs.forEach(text => {
-            try {
-              const parsed: ApiCard[] = JSON.parse(text);
-              const normalized = normalizeCards(parsed as FlashcardOld[]);
-              saveForms(normalized);
-              allCards.push(...normalized);
-            } catch (e) {
-              console.error("Ошибка парсинга batch ответа:", e);
-            }
-          });
+          const resultCards = await fetchBatchResults(createdBatchId);
+          resultCards.forEach(card => (card.visible = true));
+
+          const mergedCards = mergeCardsByBaseForm(resultCards);
+          setFlashcards(mergedCards);
+          generateTranslation(mergedCards);
         } catch (e) {
           console.error("❌ Batch processing failed:", e);
           setBatchError(e as Error);
