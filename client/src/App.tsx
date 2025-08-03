@@ -11,6 +11,7 @@ import ReadingView from "./components/ReadingView";
 import TranslationView from "./components/TranslationView";
 import EditView from "./components/EditView";
 import BatchResultRetriever from "./components/BatchResultRetriever";
+import { saveFormTranslations } from "./utils/cardUtils";
 
 // Импорт всех кастомных хуков (существующая архитектура)
 import { useProcessing } from "./hooks/useProcessing";
@@ -482,13 +483,27 @@ function App() {
           />
           <BatchResultRetriever
             onResults={cards => {
+              const rebuiltText = Array.from(
+                new Set(cards.flatMap(c => c.contexts.map(ctx => ctx.original_phrase?.trim())))
+              ).join(" ");
+
+              const rebuiltTranslation = Array.from(
+                new Set(cards.flatMap(c => c.contexts.map(ctx => ctx.phrase_translation?.trim())))
+              ).join(" ");
+
+              const rebuiltFormTranslations = saveFormTranslations(cards, new Map());
+
+              setInputText(rebuiltText);
+              setTranslationText(rebuiltTranslation);
+              setFormTranslations(rebuiltFormTranslations);
+
               setFlashcards(cards);
+              setState("ready");
               setMode("flashcards");
             }}
             setInputText={setInputText}
             setTranslationText={setTranslationText}
             setFormTranslations={setFormTranslations}
-            setState={setState} // ✅ ДОБАВЬ ЭТО
           />
         </>
       )}

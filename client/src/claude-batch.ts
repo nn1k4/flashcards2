@@ -1,5 +1,4 @@
 import { getClaudeConfig, defaultConfig } from "./config";
-import { normalizeCards } from "./utils/cardUtils"; // путь может отличаться в зависимости от структуры
 
 import type { FlashcardNew, FlashcardOld } from "./types";
 
@@ -164,31 +163,57 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
-
       const content = entry?.result?.message?.content;
       const textItem = content?.find((c: { type: string }) => c.type === "text");
       const textPayload = textItem?.text;
 
       if (!textPayload) continue;
 
-      let rawCards: FlashcardOld[];
+      const parsedCards: FlashcardOld[] =
+        typeof textPayload === "string"
+          ? JSON.parse(textPayload)
+          : Array.isArray(textPayload)
+            ? textPayload
+            : [];
 
-      if (typeof textPayload === "string") {
-        rawCards = JSON.parse(textPayload);
-      } else if (Array.isArray(textPayload)) {
-        rawCards = textPayload;
-      } else {
-        console.warn("⚠️ Unexpected payload format:", textPayload);
-        continue;
+      // Удаляем пустые и сортируем формы
+      const cleaned = parsedCards
+        .filter(c => c && c.front && c.back)
+        .map(c => {
+          if (Array.isArray(c.text_forms)) {
+            c.text_forms = [...c.text_forms].sort();
+          }
+          return c;
+        });
+
+      // Уникальные карточки по base_form + original_phrase + phrase_translation
+      const keyGen = (c: FlashcardOld) =>
+        `${c.base_form?.trim().toLowerCase()}__${c.original_phrase?.trim().toLowerCase()}__${c.phrase_translation?.trim().toLowerCase()}`;
+
+      const seen = new Map<string, FlashcardNew>();
+
+      for (const card of cleaned) {
+        const key = keyGen(card);
+        if (!seen.has(key)) {
+          seen.set(key, {
+            base_form: card.base_form?.trim() || card.front?.trim() || "",
+            base_translation: card.base_translation?.trim() || card.back?.trim() || "",
+            visible: card.visible !== false,
+            contexts: [
+              {
+                original_phrase: card.original_phrase?.trim() || "",
+                phrase_translation: card.phrase_translation?.trim() || "",
+                text_forms: card.text_forms || [],
+                word_form_translations: card.word_form_translation
+                  ? [card.word_form_translation]
+                  : [],
+              },
+            ],
+          });
+        }
       }
 
-      const normalized = normalizeCards(rawCards, "");
-      flashcards.push(
-        ...normalized.map(card => ({
-          ...card,
-          contexts: [],
-        }))
-      );
+      flashcards.push(...seen.values());
     } catch (e) {
       console.warn("⚠️ Could not parse line:", line);
       console.error("Ошибка парсинга batch ответа:", e);

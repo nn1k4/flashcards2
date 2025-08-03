@@ -1,7 +1,7 @@
 import type { FlashcardNew, FlashcardOld, Context } from "../types";
 
 // Функция нормализации карточек с валидацией и очисткой
-export const normalizeCards = (cards: FlashcardOld[], sentence: string): FlashcardOld[] => {
+export const normalizeCards = (cards: FlashcardOld[]): FlashcardOld[] => {
   return cards
     .filter(card => {
       // Более строгая валидация
@@ -21,7 +21,8 @@ export const normalizeCards = (cards: FlashcardOld[], sentence: string): Flashca
         back: (card.back || "").trim(),
         base_form: (card.base_form || card.front || "").trim(),
         base_translation: (card.base_translation || card.back || "").trim(),
-        original_phrase: (card.original_phrase || sentence || "").trim(),
+        original_phrase: card.original_phrase?.trim() || undefined,
+
         phrase_translation: (card.phrase_translation || "").trim(), // КРИТИЧНО: Сохраняем это поле
         text_forms: Array.isArray(card.text_forms)
           ? card.text_forms.filter(form => form && form.trim().length > 0)
@@ -66,13 +67,20 @@ export const mergeCardsByBaseForm = (cards: (FlashcardOld | FlashcardNew)[]): Fl
         ? [(anyCard as FlashcardOld).word_form_translation]
         : [];
 
-      const newContext: Context = {
-        original_phrase: (anyCard as FlashcardOld).original_phrase || "",
-        phrase_translation: (anyCard as FlashcardOld).phrase_translation || "",
-        text_forms: textForms,
-        word_form_translations: formTranslations,
-      };
-      contexts = [newContext];
+      const phrase = (anyCard as FlashcardOld).original_phrase?.trim();
+      const phraseTranslation = (anyCard as FlashcardOld).phrase_translation?.trim();
+
+      if (phrase && phraseTranslation) {
+        const newContext: Context = {
+          original_phrase: phrase,
+          phrase_translation: phraseTranslation,
+          text_forms: textForms,
+          word_form_translations: formTranslations,
+        };
+        contexts = [newContext];
+      } else {
+        contexts = []; // пропускаем пустые
+      }
     }
 
     if (merged.has(baseForm)) {
@@ -80,9 +88,23 @@ export const mergeCardsByBaseForm = (cards: (FlashcardOld | FlashcardNew)[]): Fl
       const existing = merged.get(baseForm)!;
 
       contexts.forEach(ctx => {
-        const isDuplicate = existing.contexts.some(
-          ex => ex.original_phrase === ctx.original_phrase
+        const phrase = ctx.original_phrase?.trim();
+        if (!phrase) return; // Пропускаем пустые строки
+
+        if (!ctx.original_phrase?.trim() || !ctx.phrase_translation?.trim()) return;
+
+        const ctxKey = `${ctx.original_phrase?.trim().toLowerCase()}__${ctx.phrase_translation?.trim().toLowerCase()}`;
+        const existingKeys = new Set(
+          existing.contexts.map(
+            ex =>
+              `${ex.original_phrase?.trim().toLowerCase()}__${ex.phrase_translation?.trim().toLowerCase()}`
+          )
         );
+
+        if (!existingKeys.has(ctxKey)) {
+          existing.contexts.push(ctx);
+        }
+
         if (!isDuplicate) {
           existing.contexts.push(ctx);
         }
