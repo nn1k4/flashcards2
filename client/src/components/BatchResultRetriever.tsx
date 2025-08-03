@@ -5,8 +5,12 @@ import { normalizeCards } from "../utils/cardUtils";
 
 interface BatchResultRetrieverProps {
   onResults?: (cards: FlashcardNew[]) => void;
-  setInputText?: (text: string) => void;
-  setTranslationText?: (text: string) => void;
+  setInputText: (text: string) => void;
+  setTranslationText: (text: string) => void;
+  setFormTranslations: (map: Map<string, string>) => void;
+  setState: (state: AppState) => void;
+  setMode: (mode: AppMode) => void;
+  setCurrentIndex: (index: number) => void;
 }
 
 const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
@@ -16,7 +20,6 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
 }) => {
   const [batchId, setBatchId] = React.useState("");
   const [status, setStatus] = React.useState<"idle" | "loading" | "done" | "error">("idle");
-  const [result, setResult] = React.useState<string>("");
 
   const handleFetch = async () => {
     if (!batchId.trim()) return;
@@ -29,7 +32,7 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
       setTranslationText?.(response.translationText || "");
 
       const cards: FlashcardNew[] = normalizeCards(response.flashcards || []);
-      setResult(JSON.stringify(cards, null, 2));
+
       onResults?.(cards);
       setStatus("done");
     } catch (e) {

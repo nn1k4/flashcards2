@@ -484,9 +484,37 @@ function App() {
             onResults={cards => {
               setFlashcards(cards);
               setMode("flashcards");
+              setCurrentIndex(0);
+              setFlipped(false);
+              setState("ready");
+
+              // восстановление formTranslations из карточек
+              const rebuiltFormTranslations = new Map<string, string>();
+              cards.forEach(card => {
+                if (Array.isArray(card.contexts)) {
+                  card.contexts.forEach(context => {
+                    if (Array.isArray(context.text_forms)) {
+                      context.text_forms.forEach(form => {
+                        const cleanForm = form
+                          .toLowerCase()
+                          .trim()
+                          .replace(/[.!?:]/g, "");
+                        if (cleanForm && !rebuiltFormTranslations.has(cleanForm)) {
+                          rebuiltFormTranslations.set(cleanForm, card.base_translation);
+                        }
+                      });
+                    }
+                  });
+                }
+              });
+              setFormTranslations(rebuiltFormTranslations);
             }}
             setInputText={setInputText}
             setTranslationText={setTranslationText}
+            setFormTranslations={setFormTranslations}
+            setState={setState}
+            setMode={setMode}
+            setCurrentIndex={setCurrentIndex}
           />
         </>
       )}
