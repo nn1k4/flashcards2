@@ -224,6 +224,7 @@ export function useProcessing(
       try {
         // НОВОЕ: Используем ApiClient с дополнительной информацией о чанке
         const raw = await apiClient.request(prompt, {
+          enableEvents: true, // ✅ CRITICAL: Ensure events are emitted
           chunkInfo: {
             description: `chunk-${chunkIndex + 1}-of-${totalChunks}`,
             originalChunk: chunk,
@@ -336,6 +337,12 @@ export function useProcessing(
 
         return processedCards;
       } catch (error) {
+        // 🛠️ ДОБАВЛЕНО: подробное логирование
+        console.error(`❌ Ошибка при обработке чанка ${chunkIndex + 1}:`, error);
+        if (error instanceof Error && error.stack) {
+          console.error(error.stack);
+        }
+
         // НОВОЕ: Используем error-handler для анализа и классификации ошибки
         const errorInfo = analyzeError(error);
 
@@ -359,8 +366,6 @@ export function useProcessing(
           needsReprocessing: true, // Флаг для APIStatusBar
         };
 
-        // Если ошибка retryable, она уже добавлена в retry queue через события ApiClient
-        // Здесь просто возвращаем error карточку для немедленного отображения
         return [errorCard];
       }
     },

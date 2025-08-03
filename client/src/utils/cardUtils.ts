@@ -105,9 +105,9 @@ export const mergeCardsByBaseForm = (cards: (FlashcardOld | FlashcardNew)[]): Fl
           existing.contexts.push(ctx);
         }
 
-        if (!isDuplicate) {
-          existing.contexts.push(ctx);
-        }
+        // if (!isDuplicate) {
+        //   existing.contexts.push(ctx);
+        // }
       });
 
       if (anyCard.needsReprocessing) {
