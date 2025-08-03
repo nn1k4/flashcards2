@@ -1,25 +1,19 @@
 import React from "react";
 import { fetchBatchResults } from "../claude-batch";
-import type { FlashcardNew, FlashcardOld } from "../types";
+import type { FlashcardNew } from "../types";
 import { normalizeCards } from "../utils/cardUtils";
 
 interface BatchResultRetrieverProps {
   onResults?: (cards: FlashcardNew[]) => void;
+  setInputText?: (text: string) => void;
+  setTranslationText?: (text: string) => void;
 }
 
-interface ApiCard {
-  id?: string;
-  base_form?: string;
-  front?: string;
-  base_translation?: string;
-  translations?: string[];
-  text_forms?: string[];
-  word_form_translation?: string;
-  word_form_translations?: string[];
-  contexts?: { latvian?: string; russian?: string; word_in_context?: string }[];
-}
-
-const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({ onResults }) => {
+const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
+  onResults,
+  setInputText,
+  setTranslationText,
+}) => {
   const [batchId, setBatchId] = React.useState("");
   const [status, setStatus] = React.useState<"idle" | "loading" | "done" | "error">("idle");
   const [result, setResult] = React.useState<string>("");
@@ -28,7 +22,13 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({ onResults }
     if (!batchId.trim()) return;
     setStatus("loading");
     try {
-      const cards: FlashcardNew[] = await fetchBatchResults(batchId.trim());
+      const response = await fetchBatchResults(batchId.trim());
+
+      // ⬇️ Восстановим исходный текст и перевод
+      setInputText?.(response.inputText || "");
+      setTranslationText?.(response.translationText || "");
+
+      const cards: FlashcardNew[] = normalizeCards(response.flashcards || []);
       setResult(JSON.stringify(cards, null, 2));
       onResults?.(cards);
       setStatus("done");

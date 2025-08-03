@@ -485,6 +485,8 @@ function App() {
               setFlashcards(cards);
               setMode("flashcards");
             }}
+            setInputText={setInputText}
+            setTranslationText={setTranslationText}
           />
         </>
       )}

@@ -130,7 +130,7 @@ export async function callClaudeBatch(
 
 export async function pollBatchStatus(batchId: string): Promise<BatchStatusResponse["outputs"]> {
   const maxAttempts = 20;
-  const interval = 5000;
+
   for (let i = 0; i < maxAttempts; i++) {
     console.log(`📡 Polling batch status (attempt ${i + 1}/${maxAttempts})...`);
     const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`);
@@ -166,7 +166,7 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
       const entry = JSON.parse(line);
 
       const content = entry?.result?.message?.content;
-      const textItem = content?.find((c: any) => c.type === "text");
+      const textItem = content?.find((c: { type: string }) => c.type === "text");
       const textPayload = textItem?.text;
 
       if (!textPayload) continue;
