@@ -1,15 +1,13 @@
 import React from "react";
 import { fetchBatchResults } from "../claude-batch";
 import type { FlashcardNew } from "../types";
-import { normalizeCards } from "../utils/cardUtils";
+import { saveFormTranslations } from "../utils/cardUtils";
 
 interface BatchResultRetrieverProps {
   onResults?: (cards: FlashcardNew[]) => void;
   setInputText?: (text: string) => void;
   setTranslationText?: (text: string) => void;
   setFormTranslations?: (map: Map<string, string>) => void;
-  setState?: (state: AppState) => void;
-  setMode?: (mode: AppMode) => void;
 }
 
 const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
@@ -17,8 +15,6 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
   setInputText,
   setTranslationText,
   setFormTranslations, // 🔧 ← вот этого не хватает
-  setState,
-  setMode,
 }) => {
   const [batchId, setBatchId] = React.useState("");
   const [status, setStatus] = React.useState<"idle" | "loading" | "done" | "error">("idle");
@@ -26,43 +22,19 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
   const handleFetch = async () => {
     if (!batchId.trim()) return;
     setStatus("loading");
-
     try {
-      const response = await fetchBatchResults(batchId.trim());
+      const cards: FlashcardNew[] = await fetchBatchResults(batchId.trim());
+      const fixedCards = cards.map(c => ({ ...c, visible: c.visible !== false }));
 
-      // ✅ Сохраняем все ключевые данные из batch-результата
-      const text = response.inputText || "";
-      const mergedTranslation = response.translationText || "";
-      const normalizedCards = normalizeCards(response.flashcards || []);
+      setInputText?.(
+        fixedCards.map(c => c.contexts.map(ctx => ctx.original_phrase).join(" ")).join(" ")
+      );
+      setFormTranslations?.(saveFormTranslations(fixedCards, new Map()));
+      setTranslationText?.(
+        fixedCards.map(c => c.contexts.map(ctx => ctx.phrase_translation).join(" ")).join(" ")
+      );
 
-      // Восстановить словарь форм
-      const rebuiltMap = new Map<string, string>();
-      normalizedCards.forEach(card => {
-        if (Array.isArray(card.contexts)) {
-          card.contexts.forEach(ctx => {
-            if (Array.isArray(ctx.text_forms)) {
-              ctx.text_forms.forEach(form => {
-                const clean = form
-                  .toLowerCase()
-                  .trim()
-                  .replace(/[.!?:]/g, "");
-                if (clean && !rebuiltMap.has(clean)) {
-                  rebuiltMap.set(clean, card.base_translation);
-                }
-              });
-            }
-          });
-        }
-      });
-
-      // 🔁 Восстанавливаем все состояния
-      onResults?.(normalizedCards);
-      setInputText?.(text);
-      setTranslationText?.(mergedTranslation);
-      setFormTranslations?.(rebuiltMap);
-      setState?.("ready");
-      setMode?.("flashcards");
-
+      onResults?.(fixedCards);
       setStatus("done");
     } catch (e) {
       console.error("Ошибка парсинга batch ответа:", e);
@@ -97,28 +69,7 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
       >
         {status === "loading" ? "Загрузка..." : "Загрузить"}
       </button>
-      {status === "done" && (
-        <div className="mt-4">
-          <textarea
-            className="w-full h-40 border rounded p-2 text-gray-900"
-            value={result}
-            readOnly
-          />
-          <button
-            onClick={() => {
-              const blob = new Blob([result], { type: "application/json" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = `batch_${batchId}.json`;
-              a.click();
-            }}
-            className="mt-2 px-4 py-2 bg-gray-700 text-white rounded"
-          >
-            Экспортировать
-          </button>
-        </div>
-      )}
+
       {status === "error" && <p className="text-red-500 mt-4">Ошибка загрузки batch</p>}
       {history.length > 0 && (
         <div className="mt-6">
