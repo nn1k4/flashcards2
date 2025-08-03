@@ -28,22 +28,12 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({ onResults }
     if (!batchId.trim()) return;
     setStatus("loading");
     try {
-      const outputs = await fetchBatchResults(batchId.trim());
-      const cards: FlashcardNew[] = [];
-      outputs.forEach(text => {
-        try {
-          const parsed: ApiCard[] = JSON.parse(text);
-          const normalized = normalizeCards(parsed as FlashcardOld[]);
-          cards.push(...normalized);
-        } catch (e) {
-          console.error("Ошибка парсинга batch ответа:", e);
-        }
-      });
+      const cards: FlashcardNew[] = await fetchBatchResults(batchId.trim());
       setResult(JSON.stringify(cards, null, 2));
       onResults?.(cards);
       setStatus("done");
     } catch (e) {
-      console.error(e);
+      console.error("Ошибка парсинга batch ответа:", e);
       setStatus("error");
     }
   };

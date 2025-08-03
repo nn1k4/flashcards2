@@ -1,4 +1,7 @@
 import { getClaudeConfig, defaultConfig } from "./config";
+import { normalizeCards } from "./utils/cardUtils"; // путь может отличаться в зависимости от структуры
+
+import type { FlashcardNew, FlashcardOld } from "./types";
 
 // Простая генерация промпта, повторяет логику из useProcessing
 function buildPrompt(
@@ -157,17 +160,38 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
   const lines = text.split("\n").filter(Boolean);
 
   const flashcards: FlashcardNew[] = [];
+
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
-      if (entry.result?.type === "succeeded") {
-        const rawText = entry.result.message?.content?.[0]?.text;
-        if (!rawText) continue;
-        const cards = JSON.parse(rawText);
-        flashcards.push(...cards);
+
+      const content = entry?.result?.message?.content;
+      const textItem = content?.find((c: any) => c.type === "text");
+      const textPayload = textItem?.text;
+
+      if (!textPayload) continue;
+
+      let rawCards: FlashcardOld[];
+
+      if (typeof textPayload === "string") {
+        rawCards = JSON.parse(textPayload);
+      } else if (Array.isArray(textPayload)) {
+        rawCards = textPayload;
+      } else {
+        console.warn("⚠️ Unexpected payload format:", textPayload);
+        continue;
       }
-    } catch (err) {
+
+      const normalized = normalizeCards(rawCards, "");
+      flashcards.push(
+        ...normalized.map(card => ({
+          ...card,
+          contexts: [],
+        }))
+      );
+    } catch (e) {
       console.warn("⚠️ Could not parse line:", line);
+      console.error("Ошибка парсинга batch ответа:", e);
     }
   }
 
