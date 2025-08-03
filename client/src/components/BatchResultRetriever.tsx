@@ -2,12 +2,14 @@ import React from "react";
 import { fetchBatchResults } from "../claude-batch";
 import type { FlashcardNew } from "../types";
 import { saveFormTranslations } from "../utils/cardUtils";
+import type { AppState } from "../types";
 
 interface BatchResultRetrieverProps {
   onResults?: (cards: FlashcardNew[]) => void;
   setInputText?: (text: string) => void;
   setTranslationText?: (text: string) => void;
   setFormTranslations?: (map: Map<string, string>) => void;
+  setState?: (state: AppState) => void; // ← ДОБАВЬ ЭТУ СТРОКУ
 }
 
 const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
@@ -15,6 +17,7 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
   setInputText,
   setTranslationText,
   setFormTranslations, // 🔧 ← вот этого не хватает
+  setState, // ← ДОБАВЬ ЗДЕСЬ
 }) => {
   const [batchId, setBatchId] = React.useState("");
   const [status, setStatus] = React.useState<"idle" | "loading" | "done" | "error">("idle");
@@ -24,17 +27,33 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
     setStatus("loading");
     try {
       const cards: FlashcardNew[] = await fetchBatchResults(batchId.trim());
+
+      // Явно устанавливаем visible = true (если не false)
       const fixedCards = cards.map(c => ({ ...c, visible: c.visible !== false }));
 
-      setInputText?.(
-        fixedCards.map(c => c.contexts.map(ctx => ctx.original_phrase).join(" ")).join(" ")
-      );
-      setFormTranslations?.(saveFormTranslations(fixedCards, new Map()));
-      setTranslationText?.(
-        fixedCards.map(c => c.contexts.map(ctx => ctx.phrase_translation).join(" ")).join(" ")
-      );
+      // Восстанавливаем текст для режима чтения
+      const combinedInputText = fixedCards
+        .map(c => c.contexts?.map(ctx => ctx.original_phrase || "").join(" "))
+        .join(" ")
+        .trim();
 
+      // Восстанавливаем текст для режима перевода
+      const combinedTranslationText = fixedCards
+        .map(c => c.contexts?.map(ctx => ctx.phrase_translation || "").join(" "))
+        .join(" ")
+        .trim();
+
+      // Устанавливаем состояния (если переданы)
+      setInputText?.(combinedInputText);
+      setTranslationText?.(combinedTranslationText);
+      setFormTranslations?.(saveFormTranslations(fixedCards, new Map()));
+
+      // Основной результат (карточки)
       onResults?.(fixedCards);
+
+      // ⬅️ Критически важно для активации UI
+      setState?.("ready");
+
       setStatus("done");
     } catch (e) {
       console.error("Ошибка парсинга batch ответа:", e);
