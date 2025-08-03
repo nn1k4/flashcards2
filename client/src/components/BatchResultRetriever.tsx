@@ -5,18 +5,20 @@ import { normalizeCards } from "../utils/cardUtils";
 
 interface BatchResultRetrieverProps {
   onResults?: (cards: FlashcardNew[]) => void;
-  setInputText: (text: string) => void;
-  setTranslationText: (text: string) => void;
-  setFormTranslations: (map: Map<string, string>) => void;
-  setState: (state: AppState) => void;
-  setMode: (mode: AppMode) => void;
-  setCurrentIndex: (index: number) => void;
+  setInputText?: (text: string) => void;
+  setTranslationText?: (text: string) => void;
+  setFormTranslations?: (map: Map<string, string>) => void;
+  setState?: (state: AppState) => void;
+  setMode?: (mode: AppMode) => void;
 }
 
 const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
   onResults,
   setInputText,
   setTranslationText,
+  setFormTranslations, // 🔧 ← вот этого не хватает
+  setState,
+  setMode,
 }) => {
   const [batchId, setBatchId] = React.useState("");
   const [status, setStatus] = React.useState<"idle" | "loading" | "done" | "error">("idle");
@@ -24,16 +26,43 @@ const BatchResultRetriever: React.FC<BatchResultRetrieverProps> = ({
   const handleFetch = async () => {
     if (!batchId.trim()) return;
     setStatus("loading");
+
     try {
       const response = await fetchBatchResults(batchId.trim());
 
-      // ⬇️ Восстановим исходный текст и перевод
-      setInputText?.(response.inputText || "");
-      setTranslationText?.(response.translationText || "");
+      // ✅ Сохраняем все ключевые данные из batch-результата
+      const text = response.inputText || "";
+      const mergedTranslation = response.translationText || "";
+      const normalizedCards = normalizeCards(response.flashcards || []);
 
-      const cards: FlashcardNew[] = normalizeCards(response.flashcards || []);
+      // Восстановить словарь форм
+      const rebuiltMap = new Map<string, string>();
+      normalizedCards.forEach(card => {
+        if (Array.isArray(card.contexts)) {
+          card.contexts.forEach(ctx => {
+            if (Array.isArray(ctx.text_forms)) {
+              ctx.text_forms.forEach(form => {
+                const clean = form
+                  .toLowerCase()
+                  .trim()
+                  .replace(/[.!?:]/g, "");
+                if (clean && !rebuiltMap.has(clean)) {
+                  rebuiltMap.set(clean, card.base_translation);
+                }
+              });
+            }
+          });
+        }
+      });
 
-      onResults?.(cards);
+      // 🔁 Восстанавливаем все состояния
+      onResults?.(normalizedCards);
+      setInputText?.(text);
+      setTranslationText?.(mergedTranslation);
+      setFormTranslations?.(rebuiltMap);
+      setState?.("ready");
+      setMode?.("flashcards");
+
       setStatus("done");
     } catch (e) {
       console.error("Ошибка парсинга batch ответа:", e);
