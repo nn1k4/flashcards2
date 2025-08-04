@@ -23,6 +23,11 @@ export const EditView: React.FC<EditViewProps> = ({
   // Локальное состояние для поиска и пагинации
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
+  // 📌 Сброс текущей страницы при изменении поискового запроса
+  React.useEffect(() => {
+    setCurrentPage(0);
+  }, [searchTerm]);
+
   const cardsPerPage = 20;
 
   // Фильтрация карточек по поисковому запросу
