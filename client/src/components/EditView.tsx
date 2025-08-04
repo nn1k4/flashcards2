@@ -5,8 +5,10 @@ import type { FlashcardNew, BaseComponentProps, Context } from "../types";
 interface EditViewProps extends BaseComponentProps {
   flashcards: FlashcardNew[]; // массив карточек для редактирования
   onCardUpdate: (index: number, field: string, value: string | boolean | Context[]) => void; // функция обновления карточки
+  onToggleVisibility?: (index: number) => void; // ✅ optional if not required internally
   onDeleteCard: (index: number) => void; // функция удаления карточки
   onAddCard: () => void; // функция добавления новой карточки
+  onClearAll: () => void;
 }
 
 // Компонент редактирования флеш-карт

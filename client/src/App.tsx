@@ -532,7 +532,7 @@ function App() {
       {mode === "edit" && (
         <EditView
           flashcards={flashcards}
-          onUpdateCard={updateCard}
+          onCardUpdate={updateCard}
           onToggleVisibility={toggleCardVisibility}
           onDeleteCard={deleteCard}
           onAddCard={addNewCard}
