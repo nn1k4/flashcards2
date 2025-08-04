@@ -2,6 +2,7 @@ import type { FlashcardNew, FlashcardOld, Context } from "../types";
 
 // Функция нормализации карточек с валидацией и очисткой
 export const normalizeCards = (cards: FlashcardOld[]): FlashcardOld[] => {
+  console.log("🐞 [normalizeCards] входные данные:", cards);
   return cards
     .filter(card => {
       // Более строгая валидация
@@ -201,7 +202,7 @@ export const findTranslationForText = (
       .trim();
     if (cardBaseForm === cleanText) {
       // НОВОЕ: ищем правильный контекст если передано предложение
-      if (sentence) {
+      if (sentence && Array.isArray(card.contexts)) {
         const rightContext = card.contexts.find(
           context =>
             context.original_phrase &&
@@ -209,7 +210,6 @@ export const findTranslationForText = (
               sentence.includes(context.original_phrase.trim()))
         );
         if (rightContext) {
-          // Возвращаем контекстно-зависимый перевод
           return {
             card: { ...card, back: card.base_translation },
             isPhrase: cleanText.includes(" "),
@@ -217,26 +217,29 @@ export const findTranslationForText = (
           };
         }
       }
+
       return { card: { ...card, back: card.base_translation }, isPhrase: cleanText.includes(" ") };
     }
 
     // 2. Поиск по text_forms с контекстом
-    for (const context of card.contexts) {
-      if (Array.isArray(context.text_forms)) {
-        const formMatch = context.text_forms.find(form => {
-          const cleanForm = form
-            .toLowerCase()
-            .replace(/[.,!?;:]/g, "")
-            .trim();
-          return cleanForm === cleanText;
-        });
-        if (formMatch) {
-          return {
-            card: { ...card, back: card.base_translation },
-            isPhrase: cleanText.includes(" "),
-            contextTranslation: context.phrase_translation,
-            textForm: formMatch,
-          };
+    if (Array.isArray(card.contexts)) {
+      for (const context of card.contexts) {
+        if (Array.isArray(context.text_forms)) {
+          const formMatch = context.text_forms.find(form => {
+            const cleanForm = form
+              .toLowerCase()
+              .replace(/[.,!?;:]/g, "")
+              .trim();
+            return cleanForm === cleanText;
+          });
+          if (formMatch) {
+            return {
+              card: { ...card, back: card.base_translation },
+              isPhrase: cleanText.includes(" "),
+              contextTranslation: context.phrase_translation,
+              textForm: formMatch,
+            };
+          }
         }
       }
     }

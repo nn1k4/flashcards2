@@ -297,6 +297,9 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
   );
 
   // Проверяем наличие текста
+  console.log("📖 [ReadingView] inputText length:", inputText?.length);
+  console.log("📖 [ReadingView] flashcards:", flashcards.length);
+
   if (!inputText) {
     return (
       <div className={`text-center text-white ${className}`} data-testid={testId}>

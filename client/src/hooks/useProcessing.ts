@@ -497,7 +497,7 @@ export function useProcessing(
           const resultCards = await fetchBatchResults(createdBatchId);
           resultCards.forEach(card => (card.visible = true));
 
-          const mergedCards = mergeCardsByBaseForm(resultCards);
+          const mergedCards = normalizeCards(resultCards, inputText); // 💡 Здесь уже есть merge внутри
           setFlashcards(mergedCards);
           generateTranslation(mergedCards);
         } catch (e) {

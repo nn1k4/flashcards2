@@ -1,4 +1,5 @@
 import { getClaudeConfig, defaultConfig } from "./config";
+import { normalizeCards, mergeCardsByBaseForm } from "./utils/cardUtils";
 
 import type { FlashcardNew, FlashcardOld } from "./types";
 
@@ -179,32 +180,8 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
           return c;
         });
 
-      const keyGen = (c: FlashcardOld) =>
-        `${c.base_form?.trim().toLowerCase()}__${c.original_phrase?.trim().toLowerCase()}__${c.phrase_translation?.trim().toLowerCase()}`;
-
-      const seen = new Map<string, FlashcardNew>();
-      for (const card of cleaned) {
-        const key = keyGen(card);
-        if (!seen.has(key)) {
-          seen.set(key, {
-            base_form: card.base_form?.trim() || card.front?.trim() || "",
-            base_translation: card.base_translation?.trim() || card.back?.trim() || "",
-            visible: card.visible !== false,
-            contexts: [
-              {
-                original_phrase: card.original_phrase?.trim() || "",
-                phrase_translation: card.phrase_translation?.trim() || "",
-                text_forms: card.text_forms || [],
-                word_form_translations: card.word_form_translation
-                  ? [card.word_form_translation]
-                  : [],
-              },
-            ],
-          });
-        }
-      }
-
-      entries.push({ id, cards: Array.from(seen.values()) });
+      // 💡 Не группируем! Просто возвращаем сырые cleaned карточки
+      entries.push({ id, cards: cleaned });
     } catch (e) {
       console.warn("⚠️ Could not parse line:", line);
       console.error("Ошибка парсинга batch ответа:", e);
@@ -218,5 +195,8 @@ export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]
     return aIndex - bIndex;
   });
 
-  return entries.flatMap(e => e.cards);
+  const allCards = entries.flatMap(e => e.cards);
+  const normalized = normalizeCards(allCards as FlashcardOld[]);
+  const merged = mergeCardsByBaseForm(normalized);
+  return merged;
 }

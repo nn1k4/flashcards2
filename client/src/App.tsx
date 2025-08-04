@@ -483,15 +483,44 @@ function App() {
           />
           <BatchResultRetriever
             onResults={cards => {
+              console.log("🐞 [App] raw cards:", cards);
+              console.log("🐞 [App] first card sample:", cards?.[0]);
+
+              // 📌 Используем поля original_phrase и phrase_translation
               const rebuiltText = Array.from(
-                new Set(cards.flatMap(c => c.contexts.map(ctx => ctx.original_phrase?.trim())))
+                new Set(
+                  cards.flatMap(card =>
+                    (card.contexts || [])
+                      .map(ctx => {
+                        const phrase = ctx?.original_phrase?.trim();
+                        if (!phrase)
+                          console.warn("⚠️ Пустая original_phrase в контексте:", ctx, card);
+                        return phrase;
+                      })
+                      .filter(Boolean)
+                  )
+                )
               ).join(" ");
 
               const rebuiltTranslation = Array.from(
-                new Set(cards.flatMap(c => c.contexts.map(ctx => ctx.phrase_translation?.trim())))
+                new Set(
+                  cards.flatMap(card =>
+                    (card.contexts || [])
+                      .map(ctx => {
+                        const tr = ctx?.phrase_translation?.trim();
+                        if (!tr)
+                          console.warn("⚠️ Пустой phrase_translation в контексте:", ctx, card);
+                        return tr;
+                      })
+                      .filter(Boolean)
+                  )
+                )
               ).join(" ");
 
               const rebuiltFormTranslations = saveFormTranslations(cards, new Map());
+
+              console.log("✅ [App] rebuiltText:", rebuiltText);
+              console.log("✅ [App] rebuiltTranslation:", rebuiltTranslation);
 
               setInputText(rebuiltText);
               setTranslationText(rebuiltTranslation);

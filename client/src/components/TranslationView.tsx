@@ -12,6 +12,9 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
   className = "",
   "data-testid": testId,
 }) => {
+  console.log("🈯 [TranslationView] translationText length:", translationText?.length);
+  console.log("🈯 [TranslationView] translationText:", translationText);
+
   return (
     <div className={`w-full max-w-4xl mx-auto p-8 ${className}`} data-testid={testId}>
       <div className="bg-white rounded-3xl p-8 shadow-lg">
