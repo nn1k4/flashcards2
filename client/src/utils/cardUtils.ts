@@ -17,14 +17,15 @@ export const normalizeCards = (cards: FlashcardOld[]): FlashcardOld[] => {
       );
     })
     .map(card => {
+      // Строка ~24, после phrase_translation
       const normalizedCard: FlashcardOld = {
         front: (card.front || "").trim(),
         back: (card.back || "").trim(),
         base_form: (card.base_form || card.front || "").trim(),
         base_translation: (card.base_translation || card.back || "").trim(),
         original_phrase: card.original_phrase?.trim() || undefined,
-
-        phrase_translation: (card.phrase_translation || "").trim(), // КРИТИЧНО: Сохраняем это поле
+        phrase_translation: (card.phrase_translation || "").trim(),
+        word_form_translation: card.word_form_translation?.trim() || undefined, // ⬅️ ДОБАВИТЬ ЭТУ СТРОКУ!
         text_forms: Array.isArray(card.text_forms)
           ? card.text_forms.filter(form => form && form.trim().length > 0)
           : [(card.front || "").trim()].filter(form => form.length > 0),
@@ -87,6 +88,10 @@ export const mergeCardsByBaseForm = (cards: (FlashcardOld | FlashcardNew)[]): Fl
     if (merged.has(baseForm)) {
       // Добавляем контекст(ы) к существующей карточке
       const existing = merged.get(baseForm)!;
+      // ДОБАВИТЬ: Обновляем word_form_translation если есть
+      if ((anyCard as FlashcardOld).word_form_translation && !existing.word_form_translation) {
+        existing.word_form_translation = (anyCard as FlashcardOld).word_form_translation;
+      }
 
       contexts.forEach(ctx => {
         const phrase = ctx.original_phrase?.trim();
@@ -123,6 +128,7 @@ export const mergeCardsByBaseForm = (cards: (FlashcardOld | FlashcardNew)[]): Fl
       merged.set(baseForm, {
         base_form: baseForm,
         base_translation: anyCard.base_translation || (anyCard as FlashcardOld).back || "",
+        word_form_translation: (anyCard as FlashcardOld).word_form_translation, // ⬅️ ДОБАВИТЬ ЭТУ СТРОКУ!
         contexts: [...contexts],
         visible: anyCard.visible !== false,
         ...(anyCard.needsReprocessing ? { needsReprocessing: true } : {}),

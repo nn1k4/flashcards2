@@ -12,6 +12,7 @@ export interface Context {
 export interface FlashcardNew {
   base_form: string; // основная форма слова (для группировки)
   base_translation: string; // перевод основной формы
+  word_form_translation?: string;
   contexts: Context[]; // МАССИВ контекстов (может быть несколько)
   visible: boolean; // видимость карточки
 }
