@@ -1,7 +1,7 @@
 import React from "react";
 import type { FlashcardNew, TooltipState, BaseComponentProps } from "../types";
 import { findPhraseAtPosition, getContainingSentence } from "../utils/textUtils";
-import { findTranslationForText, findFormTranslation } from "../utils/cardUtils";
+import { findTranslationForText } from "../utils/cardUtils";
 
 // Интерфейс пропсов для ReadingView компонента
 interface ReadingViewProps extends BaseComponentProps {
@@ -64,7 +64,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
         isPhrase,
         currentSentence: currentSentence ? currentSentence.substring(0, 50) + "..." : "none",
         cardBaseForm: card.base_form,
-        formTranslationsSize: formTranslations.size,
+        hasWordFormTranslation: !!card.word_form_translation,
       });
 
       try {
@@ -76,127 +76,83 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
         let translationText = "";
         let contextInfo = "";
 
-        if (isPhrase) {
-          // ДЛЯ ФРАЗ: сначала ищем правильную форму фразы
-          console.log(`🔍 Searching phrase translation for: "${text}"`);
+        // ===== ПРИОРИТЕТ 1: word_form_translation из карточки =====
+        if (card.word_form_translation) {
+          translationText = card.word_form_translation;
+          contextInfo = isPhrase
+            ? `Phrase: ${card.base_form || text}`
+            : `Form: ${card.base_form} → ${text}`;
+          console.log(`✅ Using word_form_translation: "${text}" → "${translationText}"`);
+        }
 
-          const cleanPhrase = text
+        // ===== ПРИОРИТЕТ 2: Поиск в formTranslations =====
+        else if (formTranslations && formTranslations.size > 0) {
+          const cleanText = text
             .toLowerCase()
             .trim()
             .replace(/[.,!?;:]/g, "");
 
-          // 1. СНАЧАЛА ищем точную форму фразы в formTranslations
-          let foundTranslation = formTranslations?.get?.(cleanPhrase);
+          if (isPhrase) {
+            // Для фраз: пробуем разные варианты
+            console.log(`🔍 Searching phrase in formTranslations: "${cleanText}"`);
 
-          if (foundTranslation) {
-            translationText = foundTranslation;
-            contextInfo = `Phrase form: ${card.base_form?.trim()} → ${text}`;
-            console.log(`✅ Found exact phrase form: "${text}" → "${foundTranslation}"`);
+            // Пробуем точное совпадение
+            translationText = formTranslations.get(cleanText) || "";
+
+            // Пробуем варианты с разделителями
+            if (!translationText) {
+              const variants = [
+                cleanText.replace(/ /g, "_"),
+                cleanText.replace(/ /g, ""),
+                cleanText.replace(/ /g, "-"),
+              ];
+
+              for (const variant of variants) {
+                const found = formTranslations.get(variant);
+                if (found) {
+                  translationText = found;
+                  console.log(`✅ Found phrase variant: "${variant}" → "${found}"`);
+                  break;
+                }
+              }
+            }
+
+            // Собираем из слов если не нашли
+            if (!translationText && cleanText.includes(" ")) {
+              const words = cleanText.split(" ");
+              const translations = words.map(w => formTranslations.get(w)).filter(Boolean);
+
+              if (translations.length > 0) {
+                // Специальная логика для "dzimšanas dienas" → "дня рождения"
+                if (
+                  words.includes("dzimšanas") &&
+                  (words.includes("diena") || words.includes("dienas"))
+                ) {
+                  translationText = translations.reverse().join(" ");
+                } else {
+                  translationText = translations.join(" ");
+                }
+                console.log(`🔧 Built phrase from words: "${translationText}"`);
+              }
+            }
+
+            if (translationText) {
+              contextInfo = `Phrase: ${card.base_form || text}`;
+            }
           } else {
-            // 2. Пробуем варианты с разными разделителями
-            const phraseVariants = [
-              cleanPhrase.replace(/ /g, "_"), // dzimšanas_dienas
-              cleanPhrase.replace(/ /g, ""), // dzimšanasdienas
-              cleanPhrase.replace(/ /g, "-"), // dzimšanas-dienas
-            ];
+            // Для слов: ищем форму
+            console.log(`🔍 Searching word in formTranslations: "${cleanText}"`);
 
-            for (const variant of phraseVariants) {
-              foundTranslation = formTranslations?.get?.(variant);
-              if (foundTranslation) {
-                translationText = foundTranslation;
-                contextInfo = `Phrase variant: ${variant}`;
-                console.log(`✅ Found phrase variant: "${variant}" → "${foundTranslation}"`);
-                break;
-              }
-            }
-          }
-
-          // 3. Если не найдено, собираем из отдельных слов
-          if (!translationText && cleanPhrase.includes(" ")) {
-            console.log(`🔧 Building phrase translation from words: "${cleanPhrase}"`);
-
-            const words = cleanPhrase.split(" ");
-            const wordTranslations = words
-              .map(word => formTranslations?.get?.(word.trim()))
-              .filter(t => t && t.length > 0);
-
-            if (wordTranslations.length > 0) {
-              // Специальная логика для латышских фраз
-              if (
-                words.length === 2 &&
-                (words.includes("dzimšanas") || words.includes("diena") || words.includes("dienas"))
-              ) {
-                // Для "dzimšanas dienas" = "рождения" + "дня" → "дня рождения"
-                translationText = wordTranslations.reverse().join(" ");
-                console.log(`🔧 Built Latvian phrase (reversed): "${translationText}"`);
-              } else {
-                translationText = wordTranslations.join(" ");
-                console.log(`🔧 Built phrase (normal order): "${translationText}"`);
-              }
-              contextInfo = `Built from: ${words.join(" ")}`;
-            }
-          }
-
-          // 4. Проверяем соответствие с base_form карточки (с очисткой пробелов)
-          if (!translationText) {
-            const cardBaseForm = (card.base_form || "")
-              .toLowerCase()
-              .trim()
-              .replace(/[.,!?;:]/g, "");
-
-            if (
-              cardBaseForm === cleanPhrase ||
-              cardBaseForm.includes(cleanPhrase) ||
-              cleanPhrase.includes(cardBaseForm)
-            ) {
-              translationText = card.base_translation || "";
-              contextInfo = `Phrase base: ${card.base_form?.trim()}`;
-              console.log(`⚠️ Using base translation for phrase: "${text}" → "${translationText}"`);
-            }
-          }
-
-          // 5. Финальный fallback
-          if (!translationText) {
-            translationText = card.base_translation || card.back || "Phrase translation not found";
-            contextInfo = `Phrase fallback: ${card.base_form?.trim() || text}`;
-            console.log(`❌ Using fallback for phrase: "${text}" → "${translationText}"`);
-          }
-
-          // 6. БЕЗОПАСНОСТЬ: убеждаемся что это строка
-          if (typeof translationText !== "string") {
-            console.error("⚠️ Phrase translationText is not string:", translationText);
-            translationText = String(translationText) || "Phrase translation error";
-          }
-        } else {
-          // ДЛЯ СЛОВ: ищем перевод конкретной формы слова из данного предложения
-          console.log(
-            `🔍 Searching word form translation for: "${text}" in sentence: "${currentSentence || "unknown"}"`
-          );
-
-          let foundTranslation = null;
-          let foundContext = "";
-
-          if (currentSentence) {
-            // 1. Безопасный поиск точной формы слова
-            const formResult = findFormTranslation(text, currentSentence, formTranslations);
-
-            if (formResult) {
-              // Безопасное извлечение перевода
-              if (typeof formResult === "string") {
-                foundTranslation = formResult;
-              } else if (typeof formResult === "object" && formResult.translation) {
-                foundTranslation = formResult.translation;
-              }
-
-              if (foundTranslation) {
-                foundContext = `Form: ${card.base_form} → ${text}`;
-                console.log(`✅ Found form translation: "${text}" → "${foundTranslation}"`);
-              }
+            // Проверяем точную форму
+            const formTranslation = formTranslations.get(cleanText);
+            if (formTranslation) {
+              translationText = formTranslation;
+              contextInfo = `Form: ${card.base_form} → ${text}`;
+              console.log(`✅ Found in formTranslations: "${cleanText}" → "${formTranslation}"`);
             }
 
-            // 2. Если не найдено, проверяем двухсловные фразы
-            if (!foundTranslation) {
-              const cleanText = text.toLowerCase().replace(/[.,!?;:]/g, "");
+            // Проверяем двухсловные комбинации
+            if (!translationText && currentSentence) {
               const sentenceWords = currentSentence.toLowerCase().split(/\s+/);
               const wordIndex = sentenceWords.findIndex(
                 w => w.replace(/[.,!?;:]/g, "") === cleanText
@@ -204,62 +160,46 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
 
               if (wordIndex >= 0 && wordIndex < sentenceWords.length - 1) {
                 const nextWord = sentenceWords[wordIndex + 1]?.replace(/[.,!?;:]/g, "");
-
                 if (nextWord) {
-                  const twoWordPhrase = `${cleanText} ${nextWord}`;
-                  console.log(`🔍 Checking two-word phrase: "${twoWordPhrase}"`);
-
-                  // Проверяем перевод фразы целиком
-                  const phraseTranslation = formTranslations?.get?.(twoWordPhrase);
+                  const phrase = `${cleanText} ${nextWord}`;
+                  const phraseTranslation = formTranslations.get(phrase);
 
                   if (phraseTranslation) {
-                    foundTranslation = phraseTranslation;
-                    foundContext = `Phrase: ${cleanText} ${nextWord}`;
-                    console.log(
-                      `✅ Found phrase translation: "${twoWordPhrase}" → "${phraseTranslation}"`
-                    );
-                  } else {
-                    // Собираем из переводов отдельных слов
-                    const word1Trans = formTranslations?.get?.(cleanText);
-                    const word2Trans = formTranslations?.get?.(nextWord);
-
-                    if (word1Trans && word2Trans) {
-                      if (
-                        cleanText === "dzimšanas" &&
-                        (nextWord === "dienas" || nextWord === "diena")
-                      ) {
-                        // Для латышского: "дня рождения" или "день рождения"
-                        foundTranslation = `${word2Trans} ${word1Trans}`;
-                        foundContext = `Built phrase: ${nextWord} ${cleanText}`;
-                        console.log(`🔧 Built "${twoWordPhrase}": "${foundTranslation}"`);
-                      } else {
-                        foundTranslation = `${word1Trans} ${word2Trans}`;
-                        foundContext = `Built phrase: ${cleanText} ${nextWord}`;
-                        console.log(`🔧 Built phrase: "${foundTranslation}"`);
-                      }
-                    }
+                    translationText = phraseTranslation;
+                    contextInfo = `Phrase: ${phrase}`;
+                    console.log(`✅ Found two-word phrase: "${phrase}" → "${phraseTranslation}"`);
                   }
                 }
               }
             }
           }
+        }
 
-          // 3. Используем найденный перевод или fallback
-          if (foundTranslation) {
-            translationText = foundTranslation;
-            contextInfo = foundContext;
-          } else {
-            // Fallback к base_translation
-            translationText = card.base_translation || card.back || "Translation not found";
-            contextInfo = `Base: ${card.base_form}`;
-            console.log(`⚠️ Using base translation: "${text}" → "${translationText}"`);
-          }
+        // ===== ПРИОРИТЕТ 3: card.back =====
+        if (!translationText && card.back) {
+          translationText = card.back;
+          contextInfo = `Card back: ${card.base_form}`;
+          console.log(`📝 Using card.back: "${text}" → "${translationText}"`);
+        }
 
-          // 4. БЕЗОПАСНОСТЬ: убеждаемся что translationText это строка
-          if (typeof translationText !== "string") {
-            console.error("⚠️ translationText is not string:", translationText);
-            translationText = String(translationText) || "Error: invalid translation";
-          }
+        // ===== ПРИОРИТЕТ 4: base_translation =====
+        if (!translationText && card.base_translation) {
+          translationText = card.base_translation;
+          contextInfo = `Base: ${card.base_form}`;
+          console.log(`⚠️ Using base_translation: "${text}" → "${translationText}"`);
+        }
+
+        // ===== FALLBACK =====
+        if (!translationText) {
+          translationText = "Translation not found";
+          contextInfo = "No translation available";
+          console.log(`❌ No translation found for: "${text}"`);
+        }
+
+        // Проверка типа для безопасности
+        if (typeof translationText !== "string") {
+          console.error("⚠️ translationText is not string:", translationText);
+          translationText = String(translationText) || "Translation error";
         }
 
         // Позиционирование tooltip
@@ -276,16 +216,17 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
         });
 
         // Визуальная обратная связь
-        if ((event.currentTarget as HTMLElement).style) {
-          (event.currentTarget as HTMLElement).style.backgroundColor = "#fef3c7"; // Желтый фон при показе tooltip
+        const element = event.currentTarget as HTMLElement;
+        if (element.style) {
+          element.style.backgroundColor = "#fef3c7"; // Желтый фон
         }
       } catch (error) {
-        console.error("❌ Tooltip positioning error:", error);
+        console.error("❌ Tooltip error:", error);
 
-        // Fallback tooltip при ошибке
+        // Fallback при ошибке
         setTooltip({
           show: true,
-          text: card.base_translation || card.back || "Translation error",
+          text: card.base_translation || card.back || "Error",
           context: "Error occurred",
           x: 0,
           y: 0,
@@ -295,7 +236,6 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
     },
     [formTranslations]
   );
-
   // Проверяем наличие текста
   console.log("📖 [ReadingView] inputText length:", inputText?.length);
   console.log("📖 [ReadingView] flashcards:", flashcards.length);
