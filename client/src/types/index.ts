@@ -1,5 +1,19 @@
 // Централизованные типы данных для приложения изучения латышского языка
 
+export type ClaudeTool = {
+  name: string;
+  description?: string;
+  input_schema?: Record<string, unknown>;
+};
+
+export type ClaudeToolChoice =
+  | "auto"
+  | "none"
+  | {
+      type: "tool" | "function";
+      name: string;
+    };
+
 // Контекст использования слова в предложении
 export interface Context {
   original_phrase: string; // предложение где встретилось слово

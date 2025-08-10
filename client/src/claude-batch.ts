@@ -1,7 +1,56 @@
 import { getClaudeConfig, defaultConfig } from "./config";
-import { normalizeCards, mergeCardsByBaseForm } from "./utils/cardUtils";
+//import { normalizeCards, mergeCardsByBaseForm } from "./utils/cardUtils";
 
 import type { FlashcardNew, FlashcardOld } from "./types";
+
+// НОВОЕ: Определение инструмента для структурированного вывода
+const FLASHCARD_TOOL = {
+  name: "create_flashcards",
+  description: "Создает структурированные флэшкарты для изучения латышского языка",
+  input_schema: {
+    type: "object",
+    properties: {
+      flashcards: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            front: { type: "string", description: "Латышское слово в тексте" },
+            back: { type: "string", description: "Русский перевод базовой формы" },
+            base_form: { type: "string", description: "Базовая форма латышского слова" },
+            base_translation: { type: "string", description: "Перевод базовой формы" },
+            word_form_translation: {
+              type: "string",
+              description: "Перевод конкретной формы слова",
+            },
+            original_phrase: { type: "string", description: "Оригинальное предложение" },
+            phrase_translation: { type: "string", description: "Перевод предложения" },
+            text_forms: {
+              type: "array",
+              items: { type: "string" },
+              description: "Формы слова в тексте",
+            },
+            item_type: {
+              type: "string",
+              enum: ["word", "phrase"],
+              description: "Тип элемента",
+            },
+          },
+          required: [
+            "front",
+            "back",
+            "base_form",
+            "base_translation",
+            "original_phrase",
+            "phrase_translation",
+          ],
+        },
+        description: "Массив флэшкарт",
+      },
+    },
+    required: ["flashcards"],
+  },
+};
 
 // Простая генерация промпта, повторяет логику из useProcessing
 function buildPrompt(
@@ -100,6 +149,9 @@ export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: stri
       model: claudeConfig.model,
       max_tokens: claudeConfig.maxTokens,
       temperature: claudeConfig.temperature,
+      // НОВОЕ: Добавляем tools и tool_choice
+      tools: [FLASHCARD_TOOL],
+      tool_choice: { type: "tool", name: "create_flashcards" },
       messages: [
         {
           role: "user",
@@ -120,9 +172,9 @@ export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: stri
   }
 
   const data = (await res.json()) as BatchCreateResponse;
-  console.log("✅ Batch created, id:", data.id);
+  console.log("✅ Batch created with TOOL CALLING, id:", data.id);
 
-  return { batchId: data.id }; // 💡 теперь возвращаем ТОЛЬКО batchId
+  return { batchId: data.id };
 }
 
 export async function pollBatchStatus(batchId: string): Promise<BatchStatusResponse["outputs"]> {
@@ -150,53 +202,232 @@ export async function pollBatchStatus(batchId: string): Promise<BatchStatusRespo
 }
 
 export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]> {
+  console.log(`📥 Начинаем получение результатов batch: ${batchId}`);
+
   const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}/results`);
-  if (!res.ok) throw new Error(`Failed to fetch batch results: ${res.status}`);
+  if (!res.ok) {
+    console.error(`❌ Ошибка получения результатов: ${res.status}`);
+    throw new Error(`Failed to fetch batch results: ${res.status}`);
+  }
 
   const text = await res.text();
-  const lines = text.split("\n").filter(Boolean);
+  console.log(`📄 Получен ответ размером ${text.length} символов`);
 
-  const entries: { id: string; cards: FlashcardNew[] }[] = [];
+  const lines = text.split("\n").filter(Boolean);
+  console.log(`📊 Найдено ${lines.length} строк в результатах`);
+
+  // Используем Map для сохранения порядка чанков
+  const chunkResults = new Map<number, FlashcardOld[]>();
+  let successCount = 0;
+  let errorCount = 0;
 
   for (const line of lines) {
     try {
       const entry = JSON.parse(line);
-      const id = entry?.custom_id || entry?.id || "";
-      const content = entry?.result?.message?.content;
-      const textItem = content?.find((c: { type: string }) => c.type === "text");
-      const textPayload = textItem?.text;
+      const customId = entry?.custom_id || "";
 
-      if (!textPayload) continue;
+      // Извлекаем индекс чанка из custom_id
+      const chunkIndex = parseInt(customId.replace("chunk-", ""));
 
-      const parsedCards: FlashcardOld[] =
-        typeof textPayload === "string" ? JSON.parse(textPayload) : [];
+      const result = entry?.result;
 
-      const cleaned = parsedCards
-        .filter(c => c && c.front && c.back)
-        .map(c => {
-          if (Array.isArray(c.text_forms)) {
-            c.text_forms = [...c.text_forms].sort();
+      if (result?.type === "succeeded") {
+        const content = result.message?.content;
+
+        if (!content || !Array.isArray(content)) {
+          console.warn(`⚠️ Нет content для ${customId}`);
+          continue;
+        }
+
+        // Ищем tool_use
+        const toolUse = content.find((c: any) => c.type === "tool_use");
+
+        if (toolUse?.input) {
+          console.log(`🔧 Найден tool_use в ${customId}`);
+
+          // ВАЖНО: Проверяем структуру данных
+          let flashcardsData = toolUse.input.flashcards || toolUse.input;
+
+          // Если это объект с полем flashcards
+          if (
+            flashcardsData &&
+            typeof flashcardsData === "object" &&
+            !Array.isArray(flashcardsData)
+          ) {
+            if (flashcardsData.flashcards) {
+              flashcardsData = flashcardsData.flashcards;
+            }
           }
-          return c;
-        });
 
-      // 💡 Не группируем! Просто возвращаем сырые cleaned карточки
-      entries.push({ id, cards: cleaned });
-    } catch (e) {
-      console.warn("⚠️ Could not parse line:", line);
-      console.error("Ошибка парсинга batch ответа:", e);
+          // Проверяем что это массив
+          if (!Array.isArray(flashcardsData)) {
+            console.error(
+              `❌ ${customId}: flashcards не является массивом:`,
+              typeof flashcardsData
+            );
+            console.log("Структура данных:", JSON.stringify(flashcardsData).substring(0, 200));
+
+            // Пробуем fallback на text parsing
+            const textItem = content.find((c: any) => c.type === "text");
+            if (textItem?.text) {
+              console.log(`⚠️ Fallback на text parsing для ${customId}`);
+              const cleaned = textItem.text
+                .replace(/```json\s*/g, "")
+                .replace(/```\s*$/g, "")
+                .trim();
+
+              try {
+                flashcardsData = JSON.parse(cleaned);
+              } catch (e) {
+                console.error(`❌ Не удалось распарсить text для ${customId}`);
+                errorCount++;
+                continue;
+              }
+            } else {
+              errorCount++;
+              continue;
+            }
+          }
+
+          // Сохраняем с правильным индексом для порядка
+          chunkResults.set(chunkIndex, flashcardsData);
+          successCount++;
+          console.log(`✅ ${customId}: обработано ${flashcardsData.length} карточек`);
+        } else {
+          // Fallback на старый метод text parsing
+          const textItem = content.find((c: any) => c.type === "text");
+          if (textItem?.text) {
+            console.log(`📝 ${customId}: используем text parsing`);
+
+            try {
+              const cleaned = textItem.text
+                .replace(/```json\s*/g, "")
+                .replace(/```\s*$/g, "")
+                .trim();
+
+              const parsedCards = JSON.parse(cleaned);
+
+              if (Array.isArray(parsedCards)) {
+                chunkResults.set(chunkIndex, parsedCards);
+                successCount++;
+              } else {
+                console.error(`❌ ${customId}: результат не массив`);
+                errorCount++;
+              }
+            } catch (e) {
+              console.error(`❌ ${customId}: ошибка парсинга:`, e);
+              errorCount++;
+            }
+          }
+        }
+      } else if (result?.type === "errored") {
+        errorCount++;
+        console.error(`❌ ${customId}: API ошибка:`, result.error);
+      }
+    } catch (error) {
+      errorCount++;
+      console.error(`❌ Ошибка обработки строки:`, error);
     }
   }
 
-  // 🔁 Сортировка по custom_id — chunk-0, chunk-1, ...
-  entries.sort((a, b) => {
-    const aIndex = parseInt(a.id.replace("chunk-", ""), 10);
-    const bIndex = parseInt(b.id.replace("chunk-", ""), 10);
-    return aIndex - bIndex;
+  // Собираем карточки в правильном порядке
+  const sortedIndices = Array.from(chunkResults.keys()).sort((a, b) => a - b);
+  const allCards: FlashcardNew[] = [];
+
+  console.log(`📑 Обработка карточек в правильном порядке: ${sortedIndices.join(", ")}`);
+
+  for (const index of sortedIndices) {
+    const chunkCards = chunkResults.get(index) || [];
+
+    for (const card of chunkCards) {
+      const existingCard = allCards.find(c => c.base_form === card.base_form);
+
+      if (existingCard) {
+        // Добавляем контекст
+        existingCard.contexts.push({
+          original_phrase: card.original_phrase,
+          phrase_translation: card.phrase_translation,
+          text_forms: card.text_forms || [card.front],
+          word_form_translations: [card.word_form_translation || card.back],
+        });
+      } else {
+        // Создаем новую карточку
+        allCards.push({
+          base_form: card.base_form,
+          base_translation: card.base_translation,
+          contexts: [
+            {
+              original_phrase: card.original_phrase,
+              phrase_translation: card.phrase_translation,
+              text_forms: card.text_forms || [card.front],
+              word_form_translations: [card.word_form_translation || card.back],
+            },
+          ],
+          visible: true,
+        });
+      }
+    }
+  }
+
+  console.log(`\n📊 ИТОГИ:`);
+  console.log(`   ✅ Успешно: ${successCount} чанков`);
+  console.log(`   ❌ Ошибки: ${errorCount} чанков`);
+  console.log(`   📚 Карточек: ${allCards.length}`);
+
+  return allCards;
+}
+
+// Функция для последовательной обработки с TOOL CALLING
+export async function processChunkWithTools(
+  chunk: string,
+  index: number,
+  total: number,
+  allChunks: string[]
+): Promise<FlashcardOld[]> {
+  const claudeConfig = getClaudeConfig("textProcessing");
+
+  const response = await fetch("http://localhost:3001/api/claude", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: claudeConfig.model,
+      max_tokens: claudeConfig.maxTokens,
+      temperature: claudeConfig.temperature,
+      tools: [FLASHCARD_TOOL],
+      tool_choice: { type: "tool", name: "create_flashcards" },
+      messages: [
+        {
+          role: "user",
+          content: buildPrompt(chunk, index, total, allChunks),
+        },
+      ],
+    }),
   });
 
-  const allCards = entries.flatMap(e => e.cards);
-  const normalized = normalizeCards(allCards as FlashcardOld[]);
-  const merged = mergeCardsByBaseForm(normalized);
-  return merged;
+  if (!response.ok) {
+    throw new Error(`API request failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  // Извлекаем данные из tool_use
+  const toolUse = data.content?.find((c: any) => c.type === "tool_use");
+
+  if (toolUse?.input?.flashcards) {
+    console.log(`✅ Чанк ${index + 1}/${total} обработан через TOOL CALLING`);
+    return toolUse.input.flashcards;
+  }
+
+  // Fallback на старый метод
+  const textContent = data.content?.find((c: any) => c.type === "text");
+  if (textContent?.text) {
+    console.warn(`⚠️ Fallback на text parsing для чанка ${index + 1}`);
+    const cleaned = textContent.text
+      .replace(/```json\s*/g, "")
+      .replace(/```\s*$/g, "")
+      .trim();
+    return JSON.parse(cleaned);
+  }
+
+  throw new Error("No flashcards in response");
 }

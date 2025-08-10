@@ -458,11 +458,12 @@ export function useProcessing(
       const sentences = splitIntoSentences(inputText);
       console.log(`📝 Текст разбит на ${sentences.length} предложений`);
 
-      // Группируем предложения в чанки по 3
+      // Группируем предложения в чанки по 1
+      const chunkSize = 1;
       const chunks = [];
-      for (let i = 0; i < sentences.length; i += 3) {
+      for (let i = 0; i < sentences.length; i += chunkSize) {
         const chunk = sentences
-          .slice(i, i + 3)
+          .slice(i, i + chunkSize)
           .join(" ")
           .trim();
         if (chunk) chunks.push(chunk);

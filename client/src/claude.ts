@@ -1,4 +1,6 @@
 import { getClaudeConfig } from "./config";
+import type { ClaudeTool, ClaudeToolChoice } from "./types";
+
 // Расширенный тип Error с дополнительными полями для HTTP ошибок
 interface ExtendedError extends Error {
   status?: number;
@@ -48,7 +50,11 @@ function formatDuration(ms: number): string {
 }
 
 // функция для вызова Claude API с retry логикой
-export async function callClaude(prompt: string): Promise<string> {
+export async function callClaude(
+  prompt: string,
+  tools?: ClaudeTool[],
+  tool_choice?: ClaudeToolChoice
+): Promise<string> {
   const startTime = Date.now();
   const requestId = Math.random().toString(36).substring(2, 8);
   const maxRetries = 3;
@@ -123,6 +129,14 @@ export async function callClaude(prompt: string): Promise<string> {
         temperature: claudeConfig.temperature,
         messages: [{ role: "user", content: prompt.trim() }],
       };
+
+      // Добавляем tools если они переданы (новые параметры функции)
+      if (tools) {
+        requestBody.tools = tools;
+      }
+      if (tool_choice) {
+        requestBody.tool_choice = tool_choice;
+      }
 
       console.log("📦 Request configuration:");
       console.log("   Model:", requestBody.model);
