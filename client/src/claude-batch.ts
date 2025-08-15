@@ -3,9 +3,9 @@ import { getClaudeConfig } from "./config";
 import type { Card, Context, FormEntry } from "./types";
 import { textToCards, mergeCardsByBaseForm } from "./utils/cardUtils";
 
-/* =========================
- *  FLASHCARD_TOOL (новая схема)
- * ========================= */
+/* =========================================================
+ * 1) Инструмент (tool) — ИМЯ ВАЖНО для tool_choice
+ * ========================================================= */
 export const FLASHCARD_TOOL = {
   name: "FLASHCARD_TOOL",
   description:
@@ -60,9 +60,9 @@ export const FLASHCARD_TOOL = {
   },
 } as const;
 
-/* =========================
- *  Промпт под новую схему (batch)
- * ========================= */
+/* =========================================================
+ * 2) Построение промпта (поддерживает ДВА варианта вызова)
+ * ========================================================= */
 function buildPromptForChunk(params: {
   chunkText: string;
   chunkIndex: number;
@@ -83,75 +83,111 @@ function buildPromptForChunk(params: {
 
   return [
     `Ты — помощник по лингвистике латышского языка.`,
-    `Задача: извлечь из текста ${enablePhraseExtraction ? "ВСЕ слова и релевантные фразы" : "ВСЕ индивидуальные слова"} и вернуть структурированные карточки через инструмент ${FLASHCARD_TOOL.name} (ровно один вызов).`,
+    `Задача: извлечь из текста ${enablePhraseExtraction ? "ВСЕ слова и релевантные фразы" : "ВСЕ индивидуальные слова"} и вернуть карточки через инструмент ${FLASHCARD_TOOL.name} (ровно один вызов).`,
     `Текст чанка [${chunkIndex + 1}/${totalChunks}]:\n${chunkText}`,
     contextSection,
-    `Требования к НОВОЙ модели Card:
-- unit: "word" или "phrase"
-- base_form: лемма (для слова) или каноническая фраза
+    `Требования к структуре:
+- unit: "word" | "phrase"
+- base_form: лемма/каноническая фраза
 - base_translation: общий перевод (fallback)
-- contexts: список предложений появления; у каждого:
-  - latvian: предложение (lv)
+- contexts[]: элементы с полями:
+  - latvian: исходное предложение (lv)
   - russian: перевод (ru)
-  - forms: массив реально встретившихся { form, translation }`,
+  - forms[]: { form, translation } для встреченных форм`,
     `Примеры:
-WORD:\n${exampleWord}\nPHRASE:\n${examplePhrase}`,
+WORD:
+${exampleWord}
+PHRASE:
+${examplePhrase}`,
     `Правила:
-1) Используй инструмент ${FLASHCARD_TOOL.name} ОДИН раз, input={"flashcards":[...]}.
+1) Вызови инструмент ${FLASHCARD_TOOL.name} ОДИН раз, input={"flashcards":[...]}.
 2) Если фразы отключены — формируй только unit="word".
 3) Не добавляй ничего вне tool_use. Никакого Markdown.
-4) Соблюдай JSON-валидность.`,
+4) Строгая JSON-валидность.`,
   ].join("\n");
 }
 
 /**
- * ПУБЛИЧНЫЙ ЭКСПОРТ для useProcessing:
- * Совместимая с хуком обёртка — принимает (chunk, index, total, contextChunks?, enablePhraseExtraction?)
- * и внутри вызывает buildPromptForChunk с prev/next.
+ * Публичная обёртка — принимает либо позиции (string, number, number, ...),
+ * либо объект с полями (совместимость с кодом до рефакторинга).
  */
 export function buildFlashcardPrompt(
-  chunkText: string,
-  chunkIndex: number,
-  totalChunks: number,
-  contextChunks?: string[],
+  arg1:
+    | string
+    | {
+        chunkText: string;
+        chunkIndex: number;
+        totalChunks: number;
+        prevText?: string;
+        nextText?: string;
+        enablePhraseExtraction?: boolean;
+      },
+  arg2?: number,
+  arg3?: number,
+  arg4?: string[],
   enablePhraseExtraction: boolean = true
 ): string {
-  const prevText = contextChunks && chunkIndex > 0 ? contextChunks[chunkIndex - 1] : undefined;
-  const nextText =
-    contextChunks && chunkIndex < totalChunks - 1 ? contextChunks[chunkIndex + 1] : undefined;
+  if (typeof arg1 === "string") {
+    const chunkText = arg1;
+    const chunkIndex = arg2 ?? 0;
+    const totalChunks = arg3 ?? 1;
+    const contextChunks = arg4;
+    const prevText = contextChunks && chunkIndex > 0 ? contextChunks[chunkIndex - 1] : undefined;
+    const nextText =
+      contextChunks && chunkIndex < totalChunks - 1 ? contextChunks[chunkIndex + 1] : undefined;
 
-  return buildPromptForChunk({
-    chunkText,
-    chunkIndex,
-    totalChunks,
-    prevText,
-    nextText,
-    enablePhraseExtraction,
-  });
+    return buildPromptForChunk({
+      chunkText,
+      chunkIndex,
+      totalChunks,
+      prevText,
+      nextText,
+      enablePhraseExtraction,
+    });
+  }
+
+  // объектная форма
+  return buildPromptForChunk(arg1);
 }
 
-/* =========================
- *  Типы для batches API (клиент)
- * ========================= */
-type BatchCreateResponse = { id: string; processing_status?: string };
-type BatchStatusResponse = {
-  id: string;
-  processing_status: string; // creating | processing | completed | canceled | failed | ...
-  results_url?: string;
-};
-type BatchItem = { custom_id: string; params: Record<string, unknown> };
-
-/* =========================
- *  Вспомогательные утилиты
- * ========================= */
+/* =========================================================
+ * 3) Утилиты парсинга
+ * ========================================================= */
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 const clean = (s: unknown) => (s == null ? "" : String(s).trim());
+
+function stripFences(s: string) {
+  return s
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*$/gi, "")
+    .trim();
+}
+
+function safeJSONParse<T = any>(s: string): T | null {
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Текстовая обёртка FLASHCARD_TOOL({...}) → JSON */
+function parseToolEnvelope(text: string): any | null {
+  const tag = `${FLASHCARD_TOOL.name}(`;
+  const idx = text.indexOf(tag);
+  if (idx === -1) return null;
+  const start = text.indexOf("(", idx);
+  const end = text.lastIndexOf(")");
+  if (start === -1 || end === -1 || end <= start) return null;
+  const inside = text.slice(start + 1, end).trim();
+  return safeJSONParse(stripFences(inside));
+}
 
 function ensureVisible(cards: Card[]): Card[] {
   return cards.map(c => ({ ...c, visible: c.visible !== false }));
 }
 
-// Конвертация со старого массива (FlashcardOld[]) в новый Card[]
+/** Конвертация старого массива в новый Card[] */
 function oldArrayToNew(oldArr: any[]): Card[] {
   if (!Array.isArray(oldArr)) return [];
   const result: Card[] = [];
@@ -189,21 +225,20 @@ function oldArrayToNew(oldArr: any[]): Card[] {
   return result;
 }
 
-// Извлечь Card[] из assistant message (приоритет tool_use)
-function parseMessageToCards(message: any, rawTextFallback?: string): Card[] {
+/** Парсим assistant message → Card[] (tool_use > текстовая обёртка > старый JSON) */
+function parseMessageToCards(message: any): Card[] {
   try {
     const content = Array.isArray(message?.content) ? message.content : [];
 
-    // 1) Ищем tool_use нашего инструмента
+    // 1) tool_use
     for (const item of content) {
       if (item?.type === "tool_use" && item?.name === FLASHCARD_TOOL.name) {
         const input = item.input ?? {};
         let arr: any[] = [];
         if (Array.isArray(input?.flashcards)) arr = input.flashcards;
-        else if (Array.isArray(input?.cards)) arr = input.cards;
-        else if (Array.isArray(input?.payload)) arr = input.payload;
+        else if (Array.isArray(input)) arr = input;
 
-        const normalized = (arr || []).map((c: any) => ({
+        const normalized: Card[] = (arr || []).map((c: any) => ({
           unit: c?.unit === "phrase" ? "phrase" : "word",
           base_form: clean(c?.base_form),
           base_translation: clean(c?.base_translation) || undefined,
@@ -227,11 +262,11 @@ function parseMessageToCards(message: any, rawTextFallback?: string): Card[] {
                 )
             : [],
           visible: c?.visible !== false,
-        })) as Card[];
+        }));
 
         return ensureVisible(
           normalized.filter(
-            (c: Card) =>
+            c =>
               (c.unit === "word" || c.unit === "phrase") &&
               c.base_form &&
               Array.isArray(c.contexts) &&
@@ -241,18 +276,32 @@ function parseMessageToCards(message: any, rawTextFallback?: string): Card[] {
       }
     }
 
-    // 2) Фолбэк: text → старый парсер → конвертация
-    const textItems = content.filter((i: any) => i?.type === "text" && typeof i?.text === "string");
-    if (textItems.length > 0) {
-      const joined = textItems.map((x: any) => x.text).join("\n");
-      const old = textToCards(joined);
-      return oldArrayToNew(old);
-    }
+    // 2) текстовые куски (включая FLASHCARD_TOOL(...))
+    const textParts = content
+      .filter((i: any) => i?.type === "text" && typeof i?.text === "string")
+      .map((i: any) => i.text);
+    if (textParts.length > 0) {
+      const joined = textParts.join("\n");
 
-    // 3) Фолбэк на сырой текст
-    if (rawTextFallback) {
-      const old = textToCards(rawTextFallback);
-      return oldArrayToNew(old);
+      // 2a) попытка снять обёртку FLASHCARD_TOOL(...)
+      const env = parseToolEnvelope(joined);
+      if (env) {
+        const list = Array.isArray(env?.flashcards)
+          ? env.flashcards
+          : Array.isArray(env)
+            ? env
+            : [];
+        if (Array.isArray(list)) {
+          const cardsFromTool = parseMessageToCards({
+            content: [{ type: "tool_use", name: FLASHCARD_TOOL.name, input: { flashcards: list } }],
+          });
+          if (cardsFromTool.length) return cardsFromTool;
+        }
+      }
+
+      // 2b) старый JSON → Card[]
+      const old = textToCards(stripFences(joined));
+      if (Array.isArray(old) && old.length > 0) return oldArrayToNew(old);
     }
 
     return [];
@@ -262,49 +311,53 @@ function parseMessageToCards(message: any, rawTextFallback?: string): Card[] {
   }
 }
 
-/* =========================
- *  Публичные функции batch API
- * ========================= */
+/* =========================================================
+ * 4) Batch API
+ * ========================================================= */
+type BatchCreateResponse = { id: string; processing_status?: string };
+type BatchStatusResponse = { id: string; processing_status: string };
+
 type BatchRequestParams = Record<string, unknown>;
 type BatchRequestItem = { custom_id: string; params: BatchRequestParams };
 
 export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: string }> {
   const cfg = getClaudeConfig("textProcessing");
-  const items: BatchRequestItem[] = [];
+  const requests: BatchRequestItem[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const chunkText = chunks[i];
     const prevText = i > 0 ? chunks[i - 1] : undefined;
     const nextText = i < chunks.length - 1 ? chunks[i + 1] : undefined;
 
-    const params: BatchRequestParams = {
-      model: cfg.model,
-      max_tokens: cfg.maxTokens,
-      temperature: cfg.temperature,
-      tools: [FLASHCARD_TOOL],
-      tool_choice: { type: "tool", name: FLASHCARD_TOOL.name }, // принудительно
-      messages: [
-        {
-          role: "user",
-          content: buildPromptForChunk({
-            chunkText,
-            chunkIndex: i,
-            totalChunks: chunks.length,
-            prevText,
-            nextText,
-            enablePhraseExtraction: true,
-          }),
-        },
-      ],
-    };
-
-    items.push({ custom_id: `chunk_${i + 1}`, params });
+    requests.push({
+      custom_id: `chunk_${i + 1}`,
+      params: {
+        model: cfg.model,
+        max_tokens: cfg.maxTokens,
+        temperature: cfg.temperature,
+        tools: [FLASHCARD_TOOL],
+        tool_choice: { type: "tool", name: FLASHCARD_TOOL.name },
+        messages: [
+          {
+            role: "user",
+            content: buildPromptForChunk({
+              chunkText,
+              chunkIndex: i,
+              totalChunks: chunks.length,
+              prevText,
+              nextText,
+              enablePhraseExtraction: true,
+            }),
+          },
+        ],
+      },
+    });
   }
 
   const resp = await fetch("http://localhost:3001/api/claude/batch", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ requests: items }),
+    body: JSON.stringify({ requests }),
   });
 
   if (!resp.ok) {
@@ -319,6 +372,10 @@ export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: stri
   return { batchId: data.id };
 }
 
+/**
+ * Ждём `ended|completed|succeeded`, терпим временами 404/сетевые ошибки на статусе,
+ * затем забираем JSONL результаты и склеиваем по base_form.
+ */
 export async function fetchBatchResults(
   batchId: string,
   options?: { pollIntervalMs?: number; maxWaitMs?: number }
@@ -327,29 +384,59 @@ export async function fetchBatchResults(
   const maxWaitMs = options?.maxWaitMs ?? 10 * 60 * 1000;
   const start = Date.now();
 
-  // 1) Ожидаем завершения
+  // 1) Ожидание терминального статуса
+  /* ТЕРМИНАЛЬНЫЕ СТАТУСЫ у Anthropic batch:
+   * - ended (Anthropic)
+   * - completed/succeeded (на некоторых прослойках)
+   */
   while (true) {
     if (Date.now() - start > maxWaitMs) throw new Error(`Timeout waiting for batch ${batchId}`);
 
-    const st = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`, { method: "GET" });
-    if (!st.ok) throw new Error(`Failed to get batch status: ${st.status} ${await st.text()}`);
+    try {
+      const st = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`, {
+        method: "GET",
+      });
+      if (!st.ok) {
+        // Бывает промежуточный 404 — не валимся, ждём ещё
+        console.warn("⚠️ batch status non-OK:", st.status, await st.text());
+        await sleep(pollIntervalMs);
+        continue;
+      }
 
-    const statusJson = (await st.json()) as BatchStatusResponse;
-    const p = statusJson?.processing_status || "";
-    console.log(`🛰️ Batch ${batchId} status: ${p}`);
+      const statusJson = (await st.json()) as BatchStatusResponse;
+      const p = (statusJson?.processing_status || "").toLowerCase();
+      console.log(`🛰️ Batch ${batchId} status: ${p}`);
 
-    if (p === "completed") break;
-    if (p === "canceled" || p === "expired" || p === "failed") {
-      throw new Error(`Batch ${batchId} ended with status ${p}`);
+      if (p === "ended" || p === "completed" || p === "succeeded") break;
+      if (p === "failed" || p === "canceled" || p === "expired") {
+        throw new Error(`Batch ${batchId} ended with status ${p}`);
+      }
+    } catch (e) {
+      // сетевые/временные проблемы — подождём и продолжим
+      console.warn("⚠️ batch status fetch error:", e);
     }
+
     await sleep(pollIntervalMs);
   }
 
-  // 2) Забираем .jsonl
-  const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}/results`, {
-    method: "GET",
-  });
-  if (!res.ok) throw new Error(`Failed to fetch batch results: ${res.status} ${await res.text()}`);
+  // 2) Получаем .jsonl с результатами
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}/results`, {
+        method: "GET",
+      });
+      if (res.ok) break;
+      console.warn("⚠️ results fetch non-OK:", res.status, await res.text());
+    } catch (e) {
+      console.warn("⚠️ results fetch error:", e);
+    }
+    await sleep(1500 * (attempt + 1));
+  }
+
+  if (!res || !res.ok) {
+    throw new Error(`Failed to fetch batch results${res ? `: ${res.status}` : ""}`);
+  }
 
   const jsonl = await res.text();
   const lines = jsonl
@@ -359,6 +446,7 @@ export async function fetchBatchResults(
   console.log(`📦 Results lines: ${lines.length}`);
 
   const collected: Card[] = [];
+
   for (const line of lines) {
     try {
       const obj = JSON.parse(line);
@@ -368,37 +456,55 @@ export async function fetchBatchResults(
         obj?.output?.message ||
         obj?.result?.output?.message;
 
-      let rawTextFallback: string | undefined;
-      try {
-        if (Array.isArray(message?.content)) {
-          rawTextFallback =
-            message.content
-              .filter((it: any) => it?.type === "text" && typeof it?.text === "string")
-              .map((it: any) => it.text)
-              .join("\n") || undefined;
-        }
-      } catch {
-        /* ignore */
-      }
+      if (!message) continue;
 
-      const cards = parseMessageToCards(message, rawTextFallback);
-      collected.push(...cards);
+      // Нормализуем в Card[]
+      const cards = parseMessageToCards(message);
+      if (cards.length) collected.push(...cards);
+      else {
+        // попробуем вытащить текст и разобрать по старой схеме
+        const text = Array.isArray(message?.content)
+          ? message.content
+              .filter((p: any) => p?.type === "text" && typeof p?.text === "string")
+              .map((p: any) => p.text)
+              .join("\n")
+          : "";
+        if (text) {
+          const toolEnv = parseToolEnvelope(text);
+          if (toolEnv) {
+            const list = Array.isArray(toolEnv?.flashcards)
+              ? toolEnv.flashcards
+              : Array.isArray(toolEnv)
+                ? toolEnv
+                : [];
+            if (Array.isArray(list)) {
+              const viaTool = parseMessageToCards({
+                content: [
+                  { type: "tool_use", name: FLASHCARD_TOOL.name, input: { flashcards: list } },
+                ],
+              });
+              collected.push(...viaTool);
+              continue;
+            }
+          }
+          const old = textToCards(stripFences(text));
+          collected.push(...oldArrayToNew(old));
+        }
+      }
     } catch (e) {
-      console.error("❌ JSONL parse error (line head):", line.substring(0, 180), e);
+      console.error("❌ JSONL parse error:", e);
     }
   }
 
   const withVisible = ensureVisible(collected);
   const merged = mergeCardsByBaseForm(withVisible);
-  console.log(
-    `🎉 Batch parsed: ${withVisible.length} cards → ${merged.length} unique base_form entries`
-  );
+  console.log(`🎉 Batch parsed: ${withVisible.length} → ${merged.length} unique base_form entries`);
   return merged;
 }
 
-/* =========================
- *  Последовательный режим (tool calling) — опционально
- * ========================= */
+/* =========================================================
+ * 5) Последовательный режим с tool-calling (используйте в useProcessing)
+ * ========================================================= */
 export async function processChunkWithTools(
   chunk: string,
   index: number,
@@ -434,21 +540,38 @@ export async function processChunkWithTools(
     }),
   });
 
-  if (!response.ok) throw new Error(`API request failed: ${response.status}`);
+  if (!response.ok)
+    throw new Error(`API request failed: ${response.status} ${await response.text()}`);
 
   const data = await response.json();
-  const cards = parseMessageToCards(data);
+
+  // 1) Нормальный путь — tool_use
+  let cards = parseMessageToCards(data);
   if (cards.length > 0) return mergeCardsByBaseForm(ensureVisible(cards));
 
-  const textContent = Array.isArray(data?.content)
-    ? data.content.find((c: any) => c?.type === "text" && typeof c?.text === "string")?.text
+  // 2) Текстовая обёртка FLASHCARD_TOOL(...)
+  const text = Array.isArray(data?.content)
+    ? data.content.find((p: any) => p?.type === "text")?.text
     : undefined;
 
-  if (textContent) {
-    const old = textToCards(textContent);
-    const converted = oldArrayToNew(old);
-    return mergeCardsByBaseForm(ensureVisible(converted));
+  if (typeof text === "string" && text.includes(`${FLASHCARD_TOOL.name}(`)) {
+    const env = parseToolEnvelope(text);
+    const list = Array.isArray(env?.flashcards) ? env.flashcards : Array.isArray(env) ? env : [];
+    if (Array.isArray(list) && list.length > 0) {
+      cards = parseMessageToCards({
+        content: [{ type: "tool_use", name: FLASHCARD_TOOL.name, input: { flashcards: list } }],
+      });
+      if (cards.length) return mergeCardsByBaseForm(ensureVisible(cards));
+    }
   }
 
-  throw new Error("No flashcards in response");
+  // 3) Старый JSON массив
+  if (typeof text === "string") {
+    const old = textToCards(stripFences(text));
+    const converted = oldArrayToNew(old);
+    if (converted.length > 0) return mergeCardsByBaseForm(ensureVisible(converted));
+  }
+
+  // Пусто — вернём [], пусть наверху решат, что с этим делать
+  return [];
 }
