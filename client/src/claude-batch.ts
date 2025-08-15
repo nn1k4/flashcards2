@@ -1,47 +1,58 @@
-import { getClaudeConfig, defaultConfig } from "./config";
-//import { normalizeCards, mergeCardsByBaseForm } from "./utils/cardUtils";
+// client/src/claude-batch.ts
+import { getClaudeConfig } from "./config";
+import type { Card, Context, FormEntry } from "./types";
+import { textToCards, mergeCardsByBaseForm } from "./utils/cardUtils";
 
-import type { FlashcardNew, FlashcardOld } from "./types";
-
-// === Инструмент для структурированного вывода карточек ===
+/* =========================
+ *  FLASHCARD_TOOL (новая схема)
+ * ========================= */
 export const FLASHCARD_TOOL = {
-  name: "create_flashcards",
-  description: "Создает структурированные флэшкарты (слова и фразы) для изучения латышского языка",
+  name: "FLASHCARD_TOOL",
+  description:
+    "Return Latvian→Russian flashcards in the new Card schema with precise sentence context and form-level translations.",
   input_schema: {
     type: "object",
+    additionalProperties: false,
     properties: {
       flashcards: {
         type: "array",
+        minItems: 0,
         items: {
           type: "object",
+          additionalProperties: false,
+          required: ["unit", "base_form", "contexts"],
           properties: {
-            unit: { type: "string", enum: ["word", "phrase"] }, // 'word' | 'phrase'
-            base_form: { type: "string", description: "Лемма или каноническая фраза" },
-            base_translation: { type: "string", description: "Перевод леммы/фразы (fallback)" },
+            unit: { type: "string", enum: ["word", "phrase"] },
+            base_form: { type: "string", minLength: 1 },
+            base_translation: { type: "string" },
             contexts: {
               type: "array",
+              minItems: 1,
               items: {
                 type: "object",
+                additionalProperties: false,
+                required: ["latvian", "russian", "forms"],
                 properties: {
-                  latvian: { type: "string", description: "Исходное предложение/фраза (lv)" },
-                  russian: { type: "string", description: "Перевод предложения/фразы (ru)" },
+                  latvian: { type: "string", minLength: 1 },
+                  russian: { type: "string", minLength: 1 },
                   forms: {
                     type: "array",
+                    minItems: 1,
                     items: {
                       type: "object",
-                      properties: {
-                        form: { type: "string", description: "Точная форма из текста" },
-                        translation: { type: "string", description: "Перевод этой формы" },
-                      },
+                      additionalProperties: false,
                       required: ["form", "translation"],
+                      properties: {
+                        form: { type: "string", minLength: 1 },
+                        translation: { type: "string", minLength: 1 },
+                      },
                     },
                   },
                 },
-                required: ["latvian", "russian", "forms"],
               },
             },
+            visible: { type: "boolean" },
           },
-          required: ["unit", "base_form", "base_translation", "contexts"],
         },
       },
     },
@@ -49,431 +60,394 @@ export const FLASHCARD_TOOL = {
   },
 } as const;
 
-// === Генератор промпта для извлечения слов и фраз ===
-// enablePhraseExtraction: если true — добавлять фразовые карточки, иначе только слово-уровень.
-// prevText/nextText: соседние предложения как дополнительный контекст (если есть).
-export function buildFlashcardPrompt(params: {
+/* =========================
+ *  Промпт под новую схему (batch)
+ * ========================= */
+function buildPromptForChunk(params: {
   chunkText: string;
   chunkIndex: number;
   totalChunks: number;
-  enablePhraseExtraction: boolean;
   prevText?: string;
   nextText?: string;
+  enablePhraseExtraction?: boolean;
 }) {
-  const { chunkText, chunkIndex, totalChunks, enablePhraseExtraction, prevText, nextText } = params;
+  const { chunkText, chunkIndex, totalChunks, prevText, nextText, enablePhraseExtraction } = params;
 
-  // Примеры новой структуры
   const exampleWord = `{"unit":"word","base_form":"māja","base_translation":"дом","contexts":[{"latvian":"Es esmu mājā.","russian":"Я в доме.","forms":[{"form":"mājā","translation":"в доме"}]}]}`;
   const examplePhrase = `{"unit":"phrase","base_form":"dzimšanas diena","base_translation":"день рождения","contexts":[{"latvian":"Mēs svinam dzimšanas dienu.","russian":"Мы празднуем день рождения.","forms":[{"form":"dzimšanas dienu","translation":"день рождения (вин.)"}]}]}`;
 
   const contextSection =
     prevText || nextText
-      ? `\nДополнительный контекст:
-- Предыдущий фрагмент: ${prevText ?? "(нет)"}
-- Следующий фрагмент: ${nextText ?? "(нет)"}\n`
+      ? `\nДополнительный контекст:\n- Предыдущий фрагмент: ${prevText ?? "(нет)"}\n- Следующий фрагмент: ${nextText ?? "(нет)"}\n`
       : "";
 
-  // Инструкция под новую схему Card и tool_use
   return [
     `Ты — помощник по лингвистике латышского языка.`,
-    `Задача: извлечь из текста ${
-      enablePhraseExtraction ? "ВСЕ слова и релевантные фразы" : "ВСЕ индивидуальные слова"
-    } и вернуть структурированные карточки через инструмент create_flashcards (ровно один вызов).`,
+    `Задача: извлечь из текста ${enablePhraseExtraction ? "ВСЕ слова и релевантные фразы" : "ВСЕ индивидуальные слова"} и вернуть структурированные карточки через инструмент ${FLASHCARD_TOOL.name} (ровно один вызов).`,
     `Текст чанка [${chunkIndex + 1}/${totalChunks}]:\n${chunkText}`,
     contextSection,
-    `Требования к данным каждой карточки (новая единая модель Card):
+    `Требования к НОВОЙ модели Card:
 - unit: "word" или "phrase"
 - base_form: лемма (для слова) или каноническая фраза
 - base_translation: общий перевод (fallback)
-- contexts: массив контекстов; у каждого:
-  - latvian: исходное предложение/фраза (lv)
-  - russian: перевод предложения/фразы (ru)
-  - forms: массив { form, translation } для реально встретившихся форм/словоформ или слов во фразе`,
-    `Примеры корректной записи:
+- contexts: список предложений появления; у каждого:
+  - latvian: предложение (lv)
+  - russian: перевод (ru)
+  - forms: массив реально встретившихся { form, translation }`,
+    `Примеры:
 WORD:\n${exampleWord}\nPHRASE:\n${examplePhrase}`,
     `Правила:
-1) Используй инструмент create_flashcards ОДИН раз, передав объект вида { "flashcards": Card[] }.
-2) Если фразы отключены, генерируй только unit="word".
-3) НЕ добавляй никаких пояснений вне tool_use. Никакого Markdown.
-4) Соблюдай JSON-валидность (без пропусков обязательных полей).`,
+1) Используй инструмент ${FLASHCARD_TOOL.name} ОДИН раз, input={"flashcards":[...]}.
+2) Если фразы отключены — формируй только unit="word".
+3) Не добавляй ничего вне tool_use. Никакого Markdown.
+4) Соблюдай JSON-валидность.`,
   ].join("\n");
 }
 
-// Простая генерация промпта, повторяет логику из useProcessing
-function buildPrompt(
-  chunk: string,
+/**
+ * ПУБЛИЧНЫЙ ЭКСПОРТ для useProcessing:
+ * Совместимая с хуком обёртка — принимает (chunk, index, total, contextChunks?, enablePhraseExtraction?)
+ * и внутри вызывает buildPromptForChunk с prev/next.
+ */
+export function buildFlashcardPrompt(
+  chunkText: string,
   chunkIndex: number,
-  _totalChunks: number,
-  contextChunks: string[]
+  totalChunks: number,
+  contextChunks?: string[],
+  enablePhraseExtraction: boolean = true
 ): string {
-  const config = defaultConfig.processing;
-  const prevChunk = chunkIndex > 0 ? contextChunks[chunkIndex - 1] : "";
-  const nextChunk = chunkIndex < contextChunks.length - 1 ? contextChunks[chunkIndex + 1] : "";
-  const contextText =
-    prevChunk || nextChunk
-      ? `\n\nДополнительный контекст:\nПредыдущий фрагмент: ${prevChunk}\nСледующий фрагмент: ${nextChunk}`
-      : "";
+  const prevText = contextChunks && chunkIndex > 0 ? contextChunks[chunkIndex - 1] : undefined;
+  const nextText =
+    contextChunks && chunkIndex < totalChunks - 1 ? contextChunks[chunkIndex + 1] : undefined;
 
-  return config.enablePhraseExtraction
-    ? `Analyze these Latvian sentences systematically for Russian learners: "${chunk}"\n\n` +
-        `STEP 1: Extract EVERY INDIVIDUAL WORD (mandatory):\n` +
-        `- Include absolutely ALL words from the text, no exceptions\n` +
-        `- Even small words like "ir", "ar", "šodien", "ļoti", "agri"\n` +
-        `- Different forms of same word (grib AND negrib as separate entries)\n` +
-        `- Pronouns, prepositions, adverbs - everything\n\n` +
-        `STEP 2: Add meaningful phrases (bonus):\n` +
-        `- Common collocations (iebiezinātais piens = сгущенное молоко)\n` +
-        `- Compound expressions (dzimšanas diena = день рождения)\n` +
-        `- Prepositional phrases (pie cepšanas = за выпечкой)\n\n` +
-        `CRITICAL REQUIREMENTS:\n` +
-        `1. Count words in original text and ensure SAME number of individual words in output\n` +
-        `2. Every single word must appear as individual entry\n` +
-        `3. Then add phrases as additional entries\n` +
-        `4. Mark each entry with item_type: "word" or "phrase"\n\n` +
-        `For each item create:\n` +
-        `- front: exact form from text\n` +
-        `- back: Russian translation of this specific form\n` +
-        `- base_form: dictionary form of the word\n` +
-        `- base_translation: Russian translation of that dictionary form\n` +
-        `- word_form_translation: Russian translation of the exact form from the text\n` +
-        `- original_phrase: the sentence containing it\n` +
-        `- phrase_translation: Russian translation of the sentence\n` +
-        `- text_forms: [form from text]\n` +
-        `- item_type: "word" or "phrase"\n\n` +
-        `EXAMPLES:\n` +
-        `Word: {"front": "agri", "back": "рано", "item_type": "word"}\n` +
-        `Word: {"front": "šodien", "back": "сегодня", "item_type": "word"}\n` +
-        `Word: {"front": "grib", "back": "хочет", "item_type": "word"}\n` +
-        `Phrase: {"front": "dzimšanas diena", "back": "день рождения", "item_type": "phrase"}\n\n` +
-        `VERIFICATION: Text has approximately ${
-          chunk.split(/\s+/).filter(w => w.length > 0).length
-        } words.\n` +
-        `Your response must include AT LEAST ${Math.floor(
-          chunk.split(/\s+/).filter(w => w.length > 0).length * 0.9
-        )} individual word entries.\n\n` +
-        `Context: ${contextText}\n\n` +
-        `Return valid JSON array of objects. Each object must include: front, back, base_form, base_translation, word_form_translation, original_phrase, phrase_translation, text_forms, item_type.\n` +
-        `CRITICAL: Return ONLY a valid JSON array. No explanations, no text before or after.\n` +
-        `Your response must start with [ and end with ]\n` +
-        `DO NOT include any text like "Here is the analysis" or explanations.\n` +
-        `RESPOND WITH PURE JSON ONLY!`
-    : `Extract EVERY individual word from these Latvian sentences: "${chunk}"\n\n` +
-        `CRITICAL: Include absolutely ALL words - no exceptions!\n` +
-        `- Small words: ir, ar, uz, pie, šodien, agri, ļoti\n` +
-        `- All verb forms: grib, negrib, pamostas, dodas\n` +
-        `- All pronouns: viņa, viņas, sev\n` +
-        `- Everything without exception\n\n` +
-        `Target: approximately ${
-          chunk.split(/\s+/).filter(w => w.length > 0).length
-        } word entries.\n\n` +
-        `For each word create JSON object with:\n` +
-        `- front: exact form from text\n` +
-        `- back: Russian translation of this specific form\n` +
-        `- base_form: dictionary form\n` +
-        `- base_translation: Russian translation of dictionary form\n` +
-        `- word_form_translation: Russian translation of exact form\n` +
-        `- original_phrase: the sentence containing it\n` +
-        `- phrase_translation: Russian translation of the sentence\n` +
-        `- text_forms: [form from text]\n\n` +
-        `Return valid JSON array. Start with [ and end with ]. No other text.\n` +
-        `Context: ${contextText}`;
+  return buildPromptForChunk({
+    chunkText,
+    chunkIndex,
+    totalChunks,
+    prevText,
+    nextText,
+    enablePhraseExtraction,
+  });
 }
 
-interface BatchCreateResponse {
+/* =========================
+ *  Типы для batches API (клиент)
+ * ========================= */
+type BatchCreateResponse = { id: string; processing_status?: string };
+type BatchStatusResponse = {
   id: string;
+  processing_status: string; // creating | processing | completed | canceled | failed | ...
+  results_url?: string;
+};
+type BatchItem = { custom_id: string; params: Record<string, unknown> };
+
+/* =========================
+ *  Вспомогательные утилиты
+ * ========================= */
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+const clean = (s: unknown) => (s == null ? "" : String(s).trim());
+
+function ensureVisible(cards: Card[]): Card[] {
+  return cards.map(c => ({ ...c, visible: c.visible !== false }));
 }
 
-interface BatchStatusResponse {
-  processing_status: string;
-  outputs?: { message?: { content?: { text: string }[] } }[];
+// Конвертация со старого массива (FlashcardOld[]) в новый Card[]
+function oldArrayToNew(oldArr: any[]): Card[] {
+  if (!Array.isArray(oldArr)) return [];
+  const result: Card[] = [];
+  for (const o of oldArr) {
+    const baseForm = clean(o?.base_form) || clean(o?.front);
+    if (!baseForm) continue;
+
+    const phrase = clean(o?.original_phrase);
+    const phraseTr = clean(o?.phrase_translation);
+    const textForms: string[] =
+      Array.isArray(o?.text_forms) && o.text_forms.length > 0
+        ? o.text_forms.map(clean)
+        : clean(o?.front)
+          ? [clean(o.front)]
+          : [];
+
+    const forms: FormEntry[] =
+      textForms.length > 0
+        ? textForms
+            .map(f => ({ form: f, translation: clean(o?.word_form_translation || o?.back) }))
+            .filter(f => f.form && f.translation)
+        : [];
+
+    const contexts: Context[] =
+      phrase && phraseTr && forms.length > 0 ? [{ latvian: phrase, russian: phraseTr, forms }] : [];
+
+    result.push({
+      unit: baseForm.includes(" ") ? "phrase" : "word",
+      base_form: baseForm,
+      base_translation: clean(o?.base_translation || o?.back) || undefined,
+      contexts,
+      visible: true,
+    });
+  }
+  return result;
 }
+
+// Извлечь Card[] из assistant message (приоритет tool_use)
+function parseMessageToCards(message: any, rawTextFallback?: string): Card[] {
+  try {
+    const content = Array.isArray(message?.content) ? message.content : [];
+
+    // 1) Ищем tool_use нашего инструмента
+    for (const item of content) {
+      if (item?.type === "tool_use" && item?.name === FLASHCARD_TOOL.name) {
+        const input = item.input ?? {};
+        let arr: any[] = [];
+        if (Array.isArray(input?.flashcards)) arr = input.flashcards;
+        else if (Array.isArray(input?.cards)) arr = input.cards;
+        else if (Array.isArray(input?.payload)) arr = input.payload;
+
+        const normalized = (arr || []).map((c: any) => ({
+          unit: c?.unit === "phrase" ? "phrase" : "word",
+          base_form: clean(c?.base_form),
+          base_translation: clean(c?.base_translation) || undefined,
+          contexts: Array.isArray(c?.contexts)
+            ? c.contexts
+                .map((ctx: any) => ({
+                  latvian: clean(ctx?.latvian),
+                  russian: clean(ctx?.russian),
+                  forms: Array.isArray(ctx?.forms)
+                    ? ctx.forms
+                        .map((f: any) => ({
+                          form: clean(f?.form),
+                          translation: clean(f?.translation),
+                        }))
+                        .filter((f: FormEntry) => f.form && f.translation)
+                    : [],
+                }))
+                .filter(
+                  (ctx: Context) =>
+                    ctx.latvian && ctx.russian && Array.isArray(ctx.forms) && ctx.forms.length > 0
+                )
+            : [],
+          visible: c?.visible !== false,
+        })) as Card[];
+
+        return ensureVisible(
+          normalized.filter(
+            (c: Card) =>
+              (c.unit === "word" || c.unit === "phrase") &&
+              c.base_form &&
+              Array.isArray(c.contexts) &&
+              c.contexts.length > 0
+          )
+        );
+      }
+    }
+
+    // 2) Фолбэк: text → старый парсер → конвертация
+    const textItems = content.filter((i: any) => i?.type === "text" && typeof i?.text === "string");
+    if (textItems.length > 0) {
+      const joined = textItems.map((x: any) => x.text).join("\n");
+      const old = textToCards(joined);
+      return oldArrayToNew(old);
+    }
+
+    // 3) Фолбэк на сырой текст
+    if (rawTextFallback) {
+      const old = textToCards(rawTextFallback);
+      return oldArrayToNew(old);
+    }
+
+    return [];
+  } catch (e) {
+    console.error("❌ parseMessageToCards error:", e);
+    return [];
+  }
+}
+
+/* =========================
+ *  Публичные функции batch API
+ * ========================= */
+type BatchRequestParams = Record<string, unknown>;
+type BatchRequestItem = { custom_id: string; params: BatchRequestParams };
 
 export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: string }> {
-  const claudeConfig = getClaudeConfig("textProcessing");
-  const requests = chunks.map((chunk, i) => ({
-    custom_id: `chunk-${i}`,
-    params: {
-      model: claudeConfig.model,
-      max_tokens: claudeConfig.maxTokens,
-      temperature: claudeConfig.temperature,
-      // НОВОЕ: Добавляем tools и tool_choice
+  const cfg = getClaudeConfig("textProcessing");
+  const items: BatchRequestItem[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkText = chunks[i];
+    const prevText = i > 0 ? chunks[i - 1] : undefined;
+    const nextText = i < chunks.length - 1 ? chunks[i + 1] : undefined;
+
+    const params: BatchRequestParams = {
+      model: cfg.model,
+      max_tokens: cfg.maxTokens,
+      temperature: cfg.temperature,
       tools: [FLASHCARD_TOOL],
-      tool_choice: { type: "tool", name: "create_flashcards" },
+      tool_choice: { type: "tool", name: FLASHCARD_TOOL.name }, // принудительно
       messages: [
         {
           role: "user",
-          content: buildPrompt(chunk, i, chunks.length, chunks),
+          content: buildPromptForChunk({
+            chunkText,
+            chunkIndex: i,
+            totalChunks: chunks.length,
+            prevText,
+            nextText,
+            enablePhraseExtraction: true,
+          }),
         },
       ],
-    },
-  }));
+    };
 
-  const res = await fetch("http://localhost:3001/api/claude/batch", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ requests }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to create batch: ${res.status}`);
+    items.push({ custom_id: `chunk_${i + 1}`, params });
   }
 
-  const data = (await res.json()) as BatchCreateResponse;
-  console.log("✅ Batch created with TOOL CALLING, id:", data.id);
+  const resp = await fetch("http://localhost:3001/api/claude/batch", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ requests: items }),
+  });
 
+  if (!resp.ok) {
+    const txt = await resp.text();
+    console.error("❌ Batch creation failed:", resp.status, txt);
+    throw new Error(`Batch creation failed: ${resp.status} ${txt}`);
+  }
+
+  const data = (await resp.json()) as BatchCreateResponse;
+  if (!data?.id) throw new Error("Batch API did not return id");
+  console.log("✅ Batch created:", data.id);
   return { batchId: data.id };
 }
 
-export async function pollBatchStatus(batchId: string): Promise<BatchStatusResponse["outputs"]> {
-  const maxAttempts = 20;
+export async function fetchBatchResults(
+  batchId: string,
+  options?: { pollIntervalMs?: number; maxWaitMs?: number }
+): Promise<Card[]> {
+  const pollIntervalMs = options?.pollIntervalMs ?? 3000;
+  const maxWaitMs = options?.maxWaitMs ?? 10 * 60 * 1000;
+  const start = Date.now();
 
-  for (let i = 0; i < maxAttempts; i++) {
-    console.log(`📡 Polling batch status (attempt ${i + 1}/${maxAttempts})...`);
-    const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`);
-    console.log("🔍 Poll response status:", res.status);
-    if (!res.ok) {
-      throw new Error(`Failed to get batch status: ${res.status}`);
-    }
-    const data = (await res.json()) as BatchStatusResponse;
-    console.log("📦 Poll data:", data);
-    if (data.processing_status === "ended") {
-      return data.outputs || [];
-    }
-    if (data.processing_status === "failed") {
-      throw new Error("Batch failed");
-    }
-    const backoff = (attempt: number) => 1000 * Math.pow(1.5, attempt);
-    await new Promise(r => setTimeout(r, backoff(i)));
-  }
-  throw new Error("Batch polling timeout");
-}
+  // 1) Ожидаем завершения
+  while (true) {
+    if (Date.now() - start > maxWaitMs) throw new Error(`Timeout waiting for batch ${batchId}`);
 
-export async function fetchBatchResults(batchId: string): Promise<FlashcardNew[]> {
-  console.log(`📥 Начинаем получение результатов batch: ${batchId}`);
+    const st = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`, { method: "GET" });
+    if (!st.ok) throw new Error(`Failed to get batch status: ${st.status} ${await st.text()}`);
 
-  const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}/results`);
-  if (!res.ok) {
-    console.error(`❌ Ошибка получения результатов: ${res.status}`);
-    throw new Error(`Failed to fetch batch results: ${res.status}`);
+    const statusJson = (await st.json()) as BatchStatusResponse;
+    const p = statusJson?.processing_status || "";
+    console.log(`🛰️ Batch ${batchId} status: ${p}`);
+
+    if (p === "completed") break;
+    if (p === "canceled" || p === "expired" || p === "failed") {
+      throw new Error(`Batch ${batchId} ended with status ${p}`);
+    }
+    await sleep(pollIntervalMs);
   }
 
-  const text = await res.text();
-  console.log(`📄 Получен ответ размером ${text.length} символов`);
+  // 2) Забираем .jsonl
+  const res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}/results`, {
+    method: "GET",
+  });
+  if (!res.ok) throw new Error(`Failed to fetch batch results: ${res.status} ${await res.text()}`);
 
-  const lines = text.split("\n").filter(Boolean);
-  console.log(`📊 Найдено ${lines.length} строк в результатах`);
+  const jsonl = await res.text();
+  const lines = jsonl
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(Boolean);
+  console.log(`📦 Results lines: ${lines.length}`);
 
-  // Используем Map для сохранения порядка чанков
-  const chunkResults = new Map<number, FlashcardOld[]>();
-  let successCount = 0;
-  let errorCount = 0;
-
+  const collected: Card[] = [];
   for (const line of lines) {
     try {
-      const entry = JSON.parse(line);
-      const customId = entry?.custom_id || "";
+      const obj = JSON.parse(line);
+      const message =
+        obj?.result?.message ||
+        obj?.message ||
+        obj?.output?.message ||
+        obj?.result?.output?.message;
 
-      // Извлекаем индекс чанка из custom_id
-      const chunkIndex = parseInt(customId.replace("chunk-", ""));
-
-      const result = entry?.result;
-
-      if (result?.type === "succeeded") {
-        const content = result.message?.content;
-
-        if (!content || !Array.isArray(content)) {
-          console.warn(`⚠️ Нет content для ${customId}`);
-          continue;
+      let rawTextFallback: string | undefined;
+      try {
+        if (Array.isArray(message?.content)) {
+          rawTextFallback =
+            message.content
+              .filter((it: any) => it?.type === "text" && typeof it?.text === "string")
+              .map((it: any) => it.text)
+              .join("\n") || undefined;
         }
-
-        // Ищем tool_use
-        const toolUse = content.find((c: any) => c.type === "tool_use");
-
-        if (toolUse?.input) {
-          console.log(`🔧 Найден tool_use в ${customId}`);
-
-          // ВАЖНО: Проверяем структуру данных
-          let flashcardsData = toolUse.input.flashcards || toolUse.input;
-
-          // Если это объект с полем flashcards
-          if (
-            flashcardsData &&
-            typeof flashcardsData === "object" &&
-            !Array.isArray(flashcardsData)
-          ) {
-            if (flashcardsData.flashcards) {
-              flashcardsData = flashcardsData.flashcards;
-            }
-          }
-
-          // Проверяем что это массив
-          if (!Array.isArray(flashcardsData)) {
-            console.error(
-              `❌ ${customId}: flashcards не является массивом:`,
-              typeof flashcardsData
-            );
-            console.log("Структура данных:", JSON.stringify(flashcardsData).substring(0, 200));
-
-            // Пробуем fallback на text parsing
-            const textItem = content.find((c: any) => c.type === "text");
-            if (textItem?.text) {
-              console.log(`⚠️ Fallback на text parsing для ${customId}`);
-              const cleaned = textItem.text
-                .replace(/```json\s*/g, "")
-                .replace(/```\s*$/g, "")
-                .trim();
-
-              try {
-                flashcardsData = JSON.parse(cleaned);
-              } catch (e) {
-                console.error(`❌ Не удалось распарсить text для ${customId}`);
-                errorCount++;
-                continue;
-              }
-            } else {
-              errorCount++;
-              continue;
-            }
-          }
-
-          // Сохраняем с правильным индексом для порядка
-          chunkResults.set(chunkIndex, flashcardsData);
-          successCount++;
-          console.log(`✅ ${customId}: обработано ${flashcardsData.length} карточек`);
-        } else {
-          // Fallback на старый метод text parsing
-          const textItem = content.find((c: any) => c.type === "text");
-          if (textItem?.text) {
-            console.log(`📝 ${customId}: используем text parsing`);
-
-            try {
-              const cleaned = textItem.text
-                .replace(/```json\s*/g, "")
-                .replace(/```\s*$/g, "")
-                .trim();
-
-              const parsedCards = JSON.parse(cleaned);
-
-              if (Array.isArray(parsedCards)) {
-                chunkResults.set(chunkIndex, parsedCards);
-                successCount++;
-              } else {
-                console.error(`❌ ${customId}: результат не массив`);
-                errorCount++;
-              }
-            } catch (e) {
-              console.error(`❌ ${customId}: ошибка парсинга:`, e);
-              errorCount++;
-            }
-          }
-        }
-      } else if (result?.type === "errored") {
-        errorCount++;
-        console.error(`❌ ${customId}: API ошибка:`, result.error);
+      } catch {
+        /* ignore */
       }
-    } catch (error) {
-      errorCount++;
-      console.error(`❌ Ошибка обработки строки:`, error);
+
+      const cards = parseMessageToCards(message, rawTextFallback);
+      collected.push(...cards);
+    } catch (e) {
+      console.error("❌ JSONL parse error (line head):", line.substring(0, 180), e);
     }
   }
 
-  // Собираем карточки в правильном порядке
-  const sortedIndices = Array.from(chunkResults.keys()).sort((a, b) => a - b);
-  const allCards: FlashcardNew[] = [];
-
-  console.log(`📑 Обработка карточек в правильном порядке: ${sortedIndices.join(", ")}`);
-
-  for (const index of sortedIndices) {
-    const chunkCards = chunkResults.get(index) || [];
-
-    for (const card of chunkCards) {
-      const existingCard = allCards.find(c => c.base_form === card.base_form);
-
-      if (existingCard) {
-        // Добавляем контекст
-        existingCard.contexts.push({
-          original_phrase: card.original_phrase,
-          phrase_translation: card.phrase_translation,
-          text_forms: card.text_forms || [card.front],
-          word_form_translations: [card.word_form_translation || card.back],
-        });
-      } else {
-        // Создаем новую карточку
-        allCards.push({
-          base_form: card.base_form,
-          base_translation: card.base_translation,
-          contexts: [
-            {
-              original_phrase: card.original_phrase,
-              phrase_translation: card.phrase_translation,
-              text_forms: card.text_forms || [card.front],
-              word_form_translations: [card.word_form_translation || card.back],
-            },
-          ],
-          visible: true,
-        });
-      }
-    }
-  }
-
-  console.log(`\n📊 ИТОГИ:`);
-  console.log(`   ✅ Успешно: ${successCount} чанков`);
-  console.log(`   ❌ Ошибки: ${errorCount} чанков`);
-  console.log(`   📚 Карточек: ${allCards.length}`);
-
-  return allCards;
+  const withVisible = ensureVisible(collected);
+  const merged = mergeCardsByBaseForm(withVisible);
+  console.log(
+    `🎉 Batch parsed: ${withVisible.length} cards → ${merged.length} unique base_form entries`
+  );
+  return merged;
 }
 
-// Функция для последовательной обработки с TOOL CALLING
+/* =========================
+ *  Последовательный режим (tool calling) — опционально
+ * ========================= */
 export async function processChunkWithTools(
   chunk: string,
   index: number,
   total: number,
   allChunks: string[]
-): Promise<FlashcardOld[]> {
-  const claudeConfig = getClaudeConfig("textProcessing");
+): Promise<Card[]> {
+  const cfg = getClaudeConfig("textProcessing");
+  const prevText = index > 0 ? allChunks[index - 1] : undefined;
+  const nextText = index < total - 1 ? allChunks[index + 1] : undefined;
 
   const response = await fetch("http://localhost:3001/api/claude", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: claudeConfig.model,
-      max_tokens: claudeConfig.maxTokens,
-      temperature: claudeConfig.temperature,
+      model: cfg.model,
+      max_tokens: cfg.maxTokens,
+      temperature: cfg.temperature,
       tools: [FLASHCARD_TOOL],
-      tool_choice: { type: "tool", name: "create_flashcards" },
+      tool_choice: { type: "tool", name: FLASHCARD_TOOL.name },
       messages: [
         {
           role: "user",
-          content: buildPrompt(chunk, index, total, allChunks),
+          content: buildPromptForChunk({
+            chunkText: chunk,
+            chunkIndex: index,
+            totalChunks: total,
+            prevText,
+            nextText,
+            enablePhraseExtraction: true,
+          }),
         },
       ],
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`API request failed: ${response.status}`);
 
   const data = await response.json();
+  const cards = parseMessageToCards(data);
+  if (cards.length > 0) return mergeCardsByBaseForm(ensureVisible(cards));
 
-  // Извлекаем данные из tool_use
-  const toolUse = data.content?.find((c: any) => c.type === "tool_use");
+  const textContent = Array.isArray(data?.content)
+    ? data.content.find((c: any) => c?.type === "text" && typeof c?.text === "string")?.text
+    : undefined;
 
-  if (toolUse?.input?.flashcards) {
-    console.log(`✅ Чанк ${index + 1}/${total} обработан через TOOL CALLING`);
-    return toolUse.input.flashcards;
-  }
-
-  // Fallback на старый метод
-  const textContent = data.content?.find((c: any) => c.type === "text");
-  if (textContent?.text) {
-    console.warn(`⚠️ Fallback на text parsing для чанка ${index + 1}`);
-    const cleaned = textContent.text
-      .replace(/```json\s*/g, "")
-      .replace(/```\s*$/g, "")
-      .trim();
-    return JSON.parse(cleaned);
+  if (textContent) {
+    const old = textToCards(textContent);
+    const converted = oldArrayToNew(old);
+    return mergeCardsByBaseForm(ensureVisible(converted));
   }
 
   throw new Error("No flashcards in response");
