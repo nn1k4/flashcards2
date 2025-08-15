@@ -1,5 +1,6 @@
+// client/src/App.tsx
 import React from "react";
-import type { AppMode, FlashcardNew } from "./types";
+import type { AppMode, Card, Context } from "./types";
 
 // Импорт всех UI компонентов (существующая архитектура)
 import Header from "./components/Header";
@@ -22,9 +23,49 @@ import { useFileOperations } from "./hooks/useFileOperations";
 import { ErrorType } from "./utils/error-handler";
 import type { QueueItem, RetryQueueStats } from "./hooks/useRetryQueue";
 
-// Интерфейс для APIStatusBar с поддержкой retry queue
+// ================== ЛОКАЛЬНЫЕ ХЕЛПЕРЫ ДЛЯ ИНТЕГРАЦИИ НОВОЙ СХЕМЫ ==================
+// Нормализация токена для сравнения/ключей
+const cleanToken = (s: string) =>
+  (s || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[.,!?;:()\[\]"'`«»]/g, "");
+
+// Построение Map переводов форм из НОВОЙ и СТАРОЙ структур карточек
+function deriveFormTranslations(cards: any[]): Map<string, string> {
+  const map = new Map<string, string>();
+
+  for (const card of cards || []) {
+    const contexts = Array.isArray(card?.contexts) ? card.contexts : [];
+
+    for (const ctx of contexts) {
+      // Новая схема: contexts[].forms[] с { form, translation }
+      if (Array.isArray(ctx?.forms) && ctx.forms.length > 0) {
+        for (const f of ctx.forms) {
+          const form = cleanToken(f?.form || "");
+          const tr = (f?.translation || "").toString().trim();
+          if (form && tr && !map.has(form)) map.set(form, tr);
+        }
+      }
+
+      // Старая схема: contexts[].text_forms[] + word_form_translations[]
+      if (Array.isArray(ctx?.text_forms) && ctx.text_forms.length > 0) {
+        const wfts = Array.isArray(ctx?.word_form_translations) ? ctx.word_form_translations : [];
+        ctx.text_forms.forEach((t: string, i: number) => {
+          const key = cleanToken(t);
+          const tr = (wfts[i] || wfts[0] || "").toString().trim();
+          if (key && tr && !map.has(key)) map.set(key, tr);
+        });
+      }
+    }
+  }
+
+  return map;
+}
+
+// ================== API Status Bar (оставляем совместимость) ==================
 interface APIStatusBarProps {
-  flashcards: FlashcardNew[];
+  flashcards: Card[];
   retryQueue?: {
     queue: QueueItem[];
     stats: RetryQueueStats;
@@ -32,7 +73,7 @@ interface APIStatusBarProps {
     clearQueue?: () => void;
   };
   onRetryProcessing?: () => Promise<{ processed: number; successful: number; failed: number }>;
-  error?: string;
+  error?: string | null;
 }
 
 // ОБНОВЛЕННЫЙ APIStatusBar с полной интеграцией retry queue
@@ -42,17 +83,16 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
   onRetryProcessing,
   error,
 }) => {
-  // Анализ карточек с ошибками (для обратной совместимости со старой системой)
+  // Анализ карточек с ошибками (сохраняем обратную совместимость: поле может существовать)
   const cardsNeedingReprocessing = flashcards.filter(
-    card => (card as { needsReprocessing?: boolean }).needsReprocessing === true
+    (card: any) => card?.needsReprocessing === true
   );
 
   // Приоритет отдаем retry queue если доступен, иначе fallback на старую логику
   const totalProblems = retryQueue ? retryQueue.queue.length : cardsNeedingReprocessing.length;
+
   // Показываем если есть проблемы ИЛИ есть ошибка
-  if (totalProblems === 0 && !error) {
-    return null; // Не показываем статус-бар если нет проблем
-  }
+  if (totalProblems === 0 && !error) return null;
 
   // Анализ типов ошибок из retry queue
   const problemTypes = retryQueue
@@ -242,7 +282,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
             fontFamily: "Noto Sans Display, sans-serif",
           }}
           title={
-            hasAuthErrors
+            problemTypes.includes(ErrorType.AUTHENTICATION)
               ? "Исправьте ошибки аутентификации"
               : retryQueue?.isProcessing
                 ? "Обработка выполняется"
@@ -251,7 +291,7 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
         >
           {retryQueue?.isProcessing
             ? "Обработка..."
-            : hasAuthErrors
+            : problemTypes.includes(ErrorType.AUTHENTICATION)
               ? "Исправьте настройки"
               : "Повторить обработку"}
         </button>
@@ -281,19 +321,20 @@ const APIStatusBar: React.FC<APIStatusBarProps> = ({
   );
 };
 
-// ГЛАВНЫЙ КОМПОНЕНТ ПРИЛОЖЕНИЯ
+// ================== ГЛАВНЫЙ КОМПОНЕНТ ПРИЛОЖЕНИЯ ==================
 function App() {
   // Основные состояния приложения
   const [mode, setMode] = React.useState<AppMode>("text");
   const [inputText, setInputText] = React.useState("");
+
   // Локальные состояния навигации по карточкам
   const [currentIndex, setCurrentIndex] = React.useState(0);
   const [flipped, setFlipped] = React.useState(false);
 
-  // ОБНОВЛЕННАЯ интеграция с useProcessing - добавляем retry функциональность
+  // ОБНОВЛЕННАЯ интеграция с useProcessing — теперь flashcards: Card[]
   const {
     state,
-    flashcards,
+    flashcards, // ← Card[]
     translationText,
     processingProgress,
     formTranslations,
@@ -307,7 +348,7 @@ function App() {
     setTranslationText,
     setState,
     setFormTranslations,
-    // НОВЫЕ поля для retry
+    // retry + batch
     processRetryQueue,
     retryQueue,
     isBatchEnabled,
@@ -317,20 +358,13 @@ function App() {
   } = useProcessing(inputText, setMode, setInputText, setCurrentIndex, setFlipped);
 
   // Колбэки для навигации по карточкам
-  const handleIndexChange = React.useCallback((idx: number) => {
-    setCurrentIndex(idx);
-  }, []);
-
-  const handleFlip = React.useCallback((value: boolean) => {
-    setFlipped(value);
-  }, []);
+  const handleIndexChange = React.useCallback((idx: number) => setCurrentIndex(idx), []);
+  const handleFlip = React.useCallback((value: boolean) => setFlipped(value), []);
 
   const handleHideCard = React.useCallback(() => {
     const visible = flashcards.map((c, i) => ({ c, i })).filter(({ c }) => c.visible !== false);
-    const item = visible[Math.min(currentIndex, visible.length - 1)];
-    if (item) {
-      toggleCardVisibility(item.i);
-    }
+    const item = visible[Math.min(currentIndex, Math.max(visible.length - 1, 0))];
+    if (item) toggleCardVisibility(item.i);
   }, [flashcards, currentIndex, toggleCardVisibility]);
 
   // Полная очистка данных вместе с retry queue
@@ -345,7 +379,7 @@ function App() {
   useKeyboardNavigation({
     mode,
     state,
-    flashcards,
+    flashcards, // Card[]
     currentIndex,
     flipped,
     onIndexChange: handleIndexChange,
@@ -355,16 +389,20 @@ function App() {
 
   // Интеграция файловых операций (существующая архитектура)
   const { exportData, importData } = useFileOperations({
-    flashcards,
+    flashcards, // Card[]
     inputText,
     translationText,
     formTranslations,
     onDataLoad: data => {
       setInputText(data.inputText);
-      setFlashcards(data.flashcards as FlashcardNew[]);
+
+      // Восстанавливаем карточки как Card[]
+      setFlashcards(data.flashcards as Card[]);
+
+      // Восстанавливаем перевод
       setTranslationText(data.translationText);
 
-      // Восстанавливаем формы переводов если есть в данных
+      // Восстанавливаем Map переводов форм
       if (data.formTranslations && Array.isArray(data.formTranslations)) {
         setFormTranslations(new Map(data.formTranslations));
       }
@@ -376,7 +414,6 @@ function App() {
 
   // НОВЫЙ обработчик retry с полным контролем процесса
   const [retryInProgress, setRetryInProgress] = React.useState(false);
-
   const handleRetryProcessing = React.useCallback(async () => {
     if (retryInProgress || !processRetryQueue) {
       console.warn("⚠️ Retry уже выполняется или processRetryQueue недоступен");
@@ -387,22 +424,17 @@ function App() {
       setRetryInProgress(true);
       console.log("🚀 Начинаем retry обработку из App.tsx");
 
-      // Функция для отслеживания прогресса retry
       const progressCallback = (current: number, total: number) => {
         console.log(`📊 Прогресс retry: ${current}/${total}`);
-        // Можно добавить отображение прогресса в UI в будущем
       };
 
       const results = await processRetryQueue(progressCallback);
-
       console.log("🏁 Retry завершен:", results);
 
       if (results.successful > 0) {
-        // Успешные обработки автоматически обновят карточки через ApiClient события
         console.log(`✅ Успешно обработано ${results.successful} из ${results.processed} чанков`);
       }
 
-      // После обработки всегда сбрасываем состояние просмотра
       setCurrentIndex(0);
       setFlipped(false);
       setMode("flashcards");
@@ -422,22 +454,16 @@ function App() {
   // Следим за progress и состоянием очереди retry
   React.useEffect(() => {
     const step = (processingProgress.step || "").trim();
-
-    // Явные ошибки по слову "Ошибка"/"error" или эмодзи, если они у вас используются
     const hasExplicitError =
       step.includes("Ошибка") ||
       step.toLowerCase().includes("error") ||
       step.startsWith("🔴") ||
       step.startsWith("🌐");
-
-    // Ошибки есть, если очередь retry содержит элементы
     const hasProblems = retryQueue?.queue?.length > 0;
 
     if (hasExplicitError || hasProblems) {
-      // Не назначайте пустую строку – достаточно передать любой непустой текст, чтобы статус‑бар отобразился
       setApiError(step || "error");
     } else if (step === "ready" || step === "") {
-      // Сбрасываем ошибку, если процесс завершён или ничего не происходит
       setApiError(null);
     }
   }, [processingProgress.step, retryQueue?.queue]);
@@ -467,6 +493,7 @@ function App() {
         onRetryProcessing={handleRetryProcessing}
         error={apiError}
       />
+
       {/* Основное содержимое - условный рендеринг по режимам */}
       {mode === "text" && (
         <>
@@ -481,22 +508,20 @@ function App() {
             batchId={batchId}
             batchError={batchError}
           />
+
           <BatchResultRetriever
-            onResults={cards => {
+            onResults={(cards: any[]) => {
               console.log("🐞 [App] raw cards:", cards);
               console.log("🐞 [App] first card sample:", cards?.[0]);
 
-              // 📌 Используем поля original_phrase и phrase_translation
+              // 📌 Собираем исходный текст и перевод из контекстов (поддержка новой/старой схемы)
               const rebuiltText = Array.from(
                 new Set(
-                  cards.flatMap(card =>
-                    (card.contexts || [])
-                      .map(ctx => {
-                        const phrase = ctx?.original_phrase?.trim();
-                        if (!phrase)
-                          console.warn("⚠️ Пустая original_phrase в контексте:", ctx, card);
-                        return phrase;
-                      })
+                  cards.flatMap((card: any) =>
+                    (card?.contexts || [])
+                      .map((ctx: any) =>
+                        (ctx?.latvian || ctx?.original_phrase || "").toString().trim()
+                      )
                       .filter(Boolean)
                   )
                 )
@@ -504,20 +529,25 @@ function App() {
 
               const rebuiltTranslation = Array.from(
                 new Set(
-                  cards.flatMap(card =>
-                    (card.contexts || [])
-                      .map(ctx => {
-                        const tr = ctx?.phrase_translation?.trim();
-                        if (!tr)
-                          console.warn("⚠️ Пустой phrase_translation в контексте:", ctx, card);
-                        return tr;
-                      })
+                  cards.flatMap((card: any) =>
+                    (card?.contexts || [])
+                      .map((ctx: any) =>
+                        (ctx?.russian || ctx?.phrase_translation || "").toString().trim()
+                      )
                       .filter(Boolean)
                   )
                 )
               ).join(" ");
 
-              const rebuiltFormTranslations = saveFormTranslations(cards, new Map());
+              // 📌 Строим Map переводов форм (новая схема) с фолбэком на старую
+              const derivedForms = deriveFormTranslations(cards);
+
+              // 🎯 Если по каким-то причинам пришла старая структура (FlashcardOld[]),
+              // поддерживаем прежний механизм сохранения:
+              const rebuiltFormTranslations =
+                derivedForms.size > 0
+                  ? derivedForms
+                  : saveFormTranslations(cards as any, new Map());
 
               console.log("✅ [App] rebuiltText:", rebuiltText);
               console.log("✅ [App] rebuiltTranslation:", rebuiltTranslation);
@@ -526,7 +556,8 @@ function App() {
               setTranslationText(rebuiltTranslation);
               setFormTranslations(rebuiltFormTranslations);
 
-              setFlashcards(cards);
+              // Сохраняем карточки как Card[]
+              setFlashcards(cards as Card[]);
               setState("ready");
               setMode("flashcards");
             }}
@@ -539,7 +570,8 @@ function App() {
 
       {mode === "flashcards" && (
         <FlashcardsView
-          flashcards={flashcards.filter(card => card.visible)}
+          // ВАЖНО: у фильтра остаётся та же логика
+          flashcards={flashcards.filter(card => card.visible) as unknown as any[]}
           currentIndex={currentIndex}
           flipped={flipped}
           onIndexChange={handleIndexChange}
@@ -551,7 +583,8 @@ function App() {
       {mode === "reading" && (
         <ReadingView
           inputText={inputText}
-          flashcards={flashcards.filter(card => card.visible)}
+          // Временный каст для совместимости с сигнатурой пропсов компонента
+          flashcards={flashcards.filter(card => card.visible) as unknown as any[]}
           formTranslations={formTranslations}
         />
       )}
@@ -560,7 +593,8 @@ function App() {
 
       {mode === "edit" && (
         <EditView
-          flashcards={flashcards}
+          // Временный каст для совместимости с сигнатурой пропсов компонента
+          flashcards={flashcards as unknown as any[]}
           onCardUpdate={updateCard}
           onToggleVisibility={toggleCardVisibility}
           onDeleteCard={deleteCard}
@@ -570,7 +604,11 @@ function App() {
       )}
 
       {/* TODO: Footer пока не используется для ошибок, все сообщения идут через APIStatusBar */}
-      <Footer flashcards={flashcards} error={apiError} processingProgress={processingProgress} />
+      <Footer
+        flashcards={flashcards as any[]}
+        error={apiError || undefined}
+        processingProgress={processingProgress}
+      />
     </div>
   );
 }

@@ -1,28 +1,49 @@
 import React, { useState } from "react";
 import type { FlashcardNew, BaseComponentProps, Context } from "../types";
 
-// Интерфейс пропсов для EditView компонента
+// ================== ВСПОМОГАТЕЛЬНЫЕ ХЕЛПЕРЫ (совместимость старой/новой схем) ==================
+function getUnit(card: any): "word" | "phrase" {
+  return card?.unit === "phrase" ? "phrase" : "word";
+}
+
+function getContextCount(card: any): number {
+  return Array.isArray(card?.contexts) ? card.contexts.length : 0;
+}
+
+function getPreviewContext(card: any): { lv: string; ru: string } | null {
+  if (!Array.isArray(card?.contexts) || card.contexts.length === 0) return null;
+  const c = card.contexts[0] || {};
+  const lv = (c.original_phrase || c.latvian || "").toString();
+  const ru = (c.phrase_translation || c.russian || "").toString();
+  if (!lv && !ru) return null;
+  return { lv, ru };
+}
+
+// ================== Пропсы компонента ==================
 interface EditViewProps extends BaseComponentProps {
   flashcards: FlashcardNew[]; // массив карточек для редактирования
   onCardUpdate: (index: number, field: string, value: string | boolean | Context[]) => void; // функция обновления карточки
   onToggleVisibility?: (index: number) => void; // ✅ optional if not required internally
   onDeleteCard: (index: number) => void; // функция удаления карточки
   onAddCard: () => void; // функция добавления новой карточки
-  onClearAll: () => void;
+  onClearAll: () => void; // очистка всех карточек
 }
 
-// Компонент редактирования флеш-карт
+// ================== Компонент редактирования флеш-карт ==================
 export const EditView: React.FC<EditViewProps> = ({
   flashcards,
   onCardUpdate,
+  onToggleVisibility,
   onDeleteCard,
   onAddCard,
+  onClearAll,
   className = "",
   "data-testid": testId,
 }) => {
   // Локальное состояние для поиска и пагинации
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
+
   // 📌 Сброс текущей страницы при изменении поискового запроса
   React.useEffect(() => {
     setCurrentPage(0);
@@ -30,16 +51,16 @@ export const EditView: React.FC<EditViewProps> = ({
 
   const cardsPerPage = 20;
 
-  // Фильтрация карточек по поисковому запросу
+  // Фильтрация карточек по поисковому запросу (учитываем base_form/base_translation/unit)
   const filteredCards = React.useMemo(() => {
     if (!searchTerm.trim()) return flashcards;
-
-    const searchLower = searchTerm.toLowerCase();
-    return flashcards.filter(
-      card =>
-        (card.base_form || "").toLowerCase().includes(searchLower) ||
-        (card.base_translation || "").toLowerCase().includes(searchLower)
-    );
+    const q = searchTerm.toLowerCase();
+    return flashcards.filter(card => {
+      const bf = (card.base_form || "").toLowerCase();
+      const bt = (card.base_translation || "").toLowerCase();
+      const u = getUnit(card);
+      return bf.includes(q) || bt.includes(q) || u.includes(q);
+    });
   }, [flashcards, searchTerm]);
 
   // Подсчет карточек для отображения
@@ -52,7 +73,7 @@ export const EditView: React.FC<EditViewProps> = ({
   // Логирование для отладки
   React.useEffect(() => {
     console.log(
-      `📊 EditView: Обновлено карточек: ${filteredCards.length} видимых: ${visibleCards.length}`
+      `📊 EditView: Обновлено карточек: ${filteredCards.length} | видимых: ${visibleCards.length}`
     );
   }, [filteredCards.length, visibleCards.length]);
 
@@ -61,31 +82,63 @@ export const EditView: React.FC<EditViewProps> = ({
     setCurrentPage(Math.max(0, Math.min(page, totalPages - 1)));
   };
 
+  // Универсальный обработчик изменения текстовых полей
+  const handleTextChange =
+    (index: number, field: "base_form" | "base_translation") =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      onCardUpdate(index, field, e.target.value);
+    };
+
+  // Обработчик смены unit
+  const handleUnitChange = (index: number) => (e: React.ChangeEvent<HTMLSelectElement>) => {
+    onCardUpdate(index, "unit", e.target.value);
+  };
+
+  // Обработчик переключения видимости (используем onToggleVisibility если передан)
+  const handleVisibilityToggle = (index: number, currentVisible: boolean) => {
+    if (typeof onToggleVisibility === "function") {
+      onToggleVisibility(index);
+    } else {
+      onCardUpdate(index, "visible", !currentVisible);
+    }
+  };
+
   return (
     <div className={`w-full max-w-7xl mx-auto p-8 ${className}`} data-testid={testId}>
-      {/* Заголовок и кнопка добавления */}
+      {/* Заголовок и действия */}
       <div className="bg-white rounded-3xl p-6 shadow-lg mb-6">
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <h2
             className="text-2xl font-bold text-gray-800"
             style={{ fontFamily: "Noto Sans Display, sans-serif" }}
           >
             Edit Flashcards ({filteredCards.length} total)
           </h2>
-          <button
-            onClick={onAddCard}
-            className="px-6 py-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors"
-            style={{ fontFamily: "Noto Sans Display, sans-serif" }}
-            data-testid="add-card-button"
-          >
-            + Add New Card
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onAddCard}
+              className="px-4 py-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors"
+              style={{ fontFamily: "Noto Sans Display, sans-serif" }}
+              data-testid="add-card-button"
+            >
+              + Add New Card
+            </button>
+            <button
+              onClick={onClearAll}
+              className="px-4 py-2 bg-red-600 text-white rounded-full hover:bg-red-700 transition-colors"
+              style={{ fontFamily: "Noto Sans Display, sans-serif" }}
+              data-testid="clear-all-button"
+              title="Очистить все карточки"
+            >
+              Clear All
+            </button>
+          </div>
         </div>
 
         {/* Поиск */}
         <input
           type="text"
-          placeholder="Search cards by base form or translation..."
+          placeholder="Search cards by base form, translation or unit..."
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
           className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:border-blue-500"
@@ -109,7 +162,13 @@ export const EditView: React.FC<EditViewProps> = ({
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-48">
                   BASE TRANSLATION
                 </th>
-                <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">
+                  UNIT
+                </th>
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">
+                  CONTEXTS
+                </th>
+                <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase w-24">
                   ACTIONS
                 </th>
               </tr>
@@ -119,55 +178,99 @@ export const EditView: React.FC<EditViewProps> = ({
                 const realIndex = startIndex + idx;
                 const needsReprocessing =
                   (card as { needsReprocessing?: boolean }).needsReprocessing === true;
+                const preview = getPreviewContext(card);
+                const contextCount = getContextCount(card);
+                const unit = getUnit(card);
+                const isVisible = card.visible !== false;
 
                 return (
                   <tr
                     key={realIndex}
-                    className={`${!card.visible ? "opacity-50 bg-gray-100" : ""}`}
+                    className={`${!isVisible ? "opacity-50 bg-gray-100" : ""}`}
                     data-testid={`card-row-${realIndex}`}
                   >
                     {/* VISIBLE checkbox */}
-                    <td className="px-3 py-4">
-                      <input
-                        type="checkbox"
-                        disabled={needsReprocessing}
-                        checked={card.visible !== false}
-                        onChange={e => onCardUpdate(realIndex, "visible", e.target.checked)}
-                        className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
-                        data-testid="visibility-checkbox"
-                      />
+                    <td className="px-3 py-4 align-top">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          disabled={needsReprocessing}
+                          checked={isVisible}
+                          onChange={() => handleVisibilityToggle(realIndex, isVisible)}
+                          className="h-4 w-4 text-blue-600 rounded focus:ring-blue-500"
+                          data-testid="visibility-checkbox"
+                          title="Переключить видимость карточки"
+                        />
+                        {needsReprocessing && (
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-amber-100 text-amber-700">
+                            needs reprocessing
+                          </span>
+                        )}
+                      </div>
                     </td>
 
-                    {/* BASE FORM */}
-                    <td className="px-3 py-4">
+                    {/* BASE FORM + превью фразы */}
+                    <td className="px-3 py-4 align-top">
                       <input
                         type="text"
                         disabled={needsReprocessing}
                         value={card.base_form || ""}
-                        onChange={e => onCardUpdate(realIndex, "base_form", e.target.value)}
+                        onChange={handleTextChange(realIndex, "base_form")}
                         placeholder="Введите базовую форму..."
                         className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"
                         style={{ fontFamily: "Noto Sans Display, sans-serif" }}
                         data-testid="base-form-input"
                       />
+                      {preview?.lv && (
+                        <div className="mt-1 text-xs text-gray-500 line-clamp-2">
+                          <span className="font-medium">LV:</span> {preview.lv}
+                        </div>
+                      )}
                     </td>
 
-                    {/* BASE TRANSLATION */}
-                    <td className="px-3 py-4">
+                    {/* BASE TRANSLATION + превью перевода */}
+                    <td className="px-3 py-4 align-top">
                       <input
                         type="text"
                         disabled={needsReprocessing}
                         value={card.base_translation || ""}
-                        onChange={e => onCardUpdate(realIndex, "base_translation", e.target.value)}
+                        onChange={handleTextChange(realIndex, "base_translation")}
                         placeholder="Введите перевод..."
                         className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"
                         style={{ fontFamily: "Noto Sans Display, sans-serif" }}
                         data-testid="base-translation-input"
                       />
+                      {preview?.ru && (
+                        <div className="mt-1 text-xs text-gray-500 line-clamp-2">
+                          <span className="font-medium">RU:</span> {preview.ru}
+                        </div>
+                      )}
+                    </td>
+
+                    {/* UNIT */}
+                    <td className="px-3 py-4 align-top">
+                      <select
+                        className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500"
+                        value={unit}
+                        onChange={handleUnitChange(realIndex)}
+                        disabled={needsReprocessing}
+                        title="Тип карточки"
+                      >
+                        <option value="word">word</option>
+                        <option value="phrase">phrase</option>
+                      </select>
+                    </td>
+
+                    {/* CONTEXTS count */}
+                    <td className="px-3 py-4 align-top">
+                      <span className="inline-flex items-center gap-2 text-sm">
+                        <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                        {contextCount}
+                      </span>
                     </td>
 
                     {/* ACTIONS */}
-                    <td className="px-3 py-4 text-center">
+                    <td className="px-3 py-4 text-center align-top">
                       {!needsReprocessing && (
                         <button
                           onClick={() => onDeleteCard(realIndex)}

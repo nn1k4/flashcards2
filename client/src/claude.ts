@@ -1,3 +1,4 @@
+// client/src/claude.ts
 import { getClaudeConfig } from "./config";
 import type { ClaudeTool, ClaudeToolChoice } from "./types";
 
@@ -7,11 +8,20 @@ interface ExtendedError extends Error {
   retryAfter?: string | null;
 }
 
-// Интерфейсы для типизации ответов Claude API
-interface ClaudeContent {
-  type: string;
+// ---- Типы контента ответа Claude (добавили tool_use) ----
+interface ClaudeTextContent {
+  type: "text";
   text: string;
 }
+
+interface ClaudeToolUseContent {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: any; // ожидаем { flashcards: Card[] } или массив Card[]
+}
+
+type ClaudeContent = ClaudeTextContent | ClaudeToolUseContent;
 
 interface ClaudeResponse {
   content: ClaudeContent[];
@@ -123,7 +133,8 @@ export async function callClaude(
       // Подготовка тела запроса
       const claudeConfig = getClaudeConfig("textProcessing");
 
-      const requestBody = {
+      // Используем any, чтобы легально добавлять tools/tool_choice
+      const requestBody: any = {
         model: claudeConfig.model,
         max_tokens: claudeConfig.maxTokens,
         temperature: claudeConfig.temperature,
@@ -131,17 +142,16 @@ export async function callClaude(
       };
 
       // Добавляем tools если они переданы (новые параметры функции)
-      if (tools) {
-        requestBody.tools = tools;
-      }
-      if (tool_choice) {
-        requestBody.tool_choice = tool_choice;
-      }
+      if (tools) requestBody.tools = tools;
+      if (tool_choice) requestBody.tool_choice = tool_choice;
 
       console.log("📦 Request configuration:");
       console.log("   Model:", requestBody.model);
       console.log("   Max tokens:", requestBody.max_tokens);
       console.log("   Temperature:", requestBody.temperature);
+      if (requestBody.tools) console.log("   Tools attached:", requestBody.tools.length);
+      if (requestBody.tool_choice)
+        console.log("   Tool choice:", JSON.stringify(requestBody.tool_choice));
 
       const attemptStartTime = Date.now();
       console.log("🚀 Sending HTTP request to proxy server...");
@@ -258,7 +268,9 @@ export async function callClaude(
       } catch (parseError) {
         console.error("❌ JSON parsing failed:", parseError);
         console.error("📄 Problematic text (first 200 chars):", responseText.substring(0, 200));
-        return `[Error: Invalid JSON response - ${parseError instanceof Error ? parseError.message : "Unknown parse error"}]`;
+        return `[Error: Invalid JSON response - ${
+          parseError instanceof Error ? parseError.message : "Unknown parse error"
+        }]`;
       }
 
       // Проверяем, есть ли ошибка в ответе
@@ -289,19 +301,37 @@ export async function callClaude(
         return "[Error: Empty response content]";
       }
 
-      // Извлекаем текст из первого элемента content
-      const firstContent = claudeResponse.content[0];
-      console.log("📝 Processing content item:");
-      console.log("   Type:", firstContent.type);
-      console.log("   Has text:", !!firstContent.text);
+      // ===== НОВОЕ: попытка извлечь структурированный вывод из tool_use =====
+      const toolUse = claudeResponse.content.find((c: ClaudeContent) => c.type === "tool_use") as
+        | ClaudeToolUseContent
+        | undefined;
 
-      if (!firstContent.text) {
-        console.error("❌ No text field in content item");
-        console.error("📦 Content item keys:", Object.keys(firstContent));
-        return "[Error: No text in response content]";
+      if (toolUse?.input) {
+        // Ожидаем либо { flashcards: Card[] }, либо сразу массив
+        const input = toolUse.input;
+        const payload = input?.flashcards ?? input;
+        const jsonText = JSON.stringify(payload);
+        console.log("🔧 tool_use detected, returning JSON (length):", jsonText.length);
+        const totalTime = Date.now() - startTime;
+        console.log(
+          `🏁 Request completed via tool_use in ${formatDuration(totalTime)} (attempt ${attempt})`
+        );
+        console.log(`===== END CLAUDE API CALL [${requestId}] =====\n`);
+        return jsonText;
       }
 
-      const output = firstContent.text.trim();
+      // Если tool_use не был вызван, собираем текст как раньше (берём ПЕРВЫЙ text-блок)
+      const firstTextContent = claudeResponse.content.find(
+        (c: ClaudeContent): c is ClaudeTextContent =>
+          c.type === "text" && typeof (c as any).text === "string"
+      );
+
+      if (!firstTextContent) {
+        console.error("❌ No text content available and no tool_use found");
+        return "[Error: No text/tool_use in response content]";
+      }
+
+      const output = firstTextContent.text.trim();
       const totalTime = Date.now() - startTime;
 
       console.log("✅ Text extracted successfully:");
@@ -351,11 +381,11 @@ export async function callClaude(
   console.error(`\n💥 All retry attempts failed after ${formatDuration(totalTime)}:`);
 
   const err = lastError as Error;
-  console.error("Final error type:", err.constructor?.name || "Unknown");
+  console.error("Final error type:", (err as any).constructor?.name || "Unknown");
   console.error("Final error message:", err.message || "No message");
 
   // Возвращаем специфичные ошибки для разных случаев
-  if (err.message?.includes("fetch") || err.name === "TypeError") {
+  if (err.message?.includes("fetch") || (err as any).name === "TypeError") {
     console.error("🌐 Вероятная проблема: Прокси сервер не запущен или недоступен");
     console.error("   Проверьте что сервер запущен на http://localhost:3001");
     return "[Error: Proxy server unavailable - check if server is running]";

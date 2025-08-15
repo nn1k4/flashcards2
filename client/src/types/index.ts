@@ -1,5 +1,76 @@
 // Централизованные типы данных для приложения изучения латышского языка
 
+// ===================== НОВЫЕ ТИПЫ КАРТОЧЕК (v3) =====================
+// Единица изучения: отдельное слово или фраза
+export type Unit = "word" | "phrase";
+
+// Встреченная форма в контексте и её перевод
+export interface FormEntry {
+  form: string; // точная форма из текста (слово/словосочетание)
+  translation: string; // перевод этой формы
+}
+
+// Контекст появления: LV предложение/фраза и его RU перевод + формы
+export interface Context {
+  latvian: string; // исходная фраза/предложение (lv)
+  russian: string; // перевод фразы/предложения (ru)
+  forms: FormEntry[]; // реально встретившиеся формы (1..N)
+}
+
+// Унифицированная карточка
+export interface Card {
+  unit: Unit; // 'word' | 'phrase'
+  base_form: string; // лемма или каноническая фраза
+  base_translation?: string; // общий перевод (fallback на "спинку")
+  contexts: Context[]; // все контексты появления
+  visible: boolean; // совместимость с UI
+}
+
+// ===================== ВРЕМЕННЫЙ СОВМЕСТИМЫЙ СЛОЙ =====================
+// ВАЖНО: Эти типы будут удалены после завершения этапов 2–8.
+// Нужны, чтобы на Этапе 1 сборка оставалась зелёной,
+// пока остальной код еще импортирует старые имена.
+
+/** @deprecated Используйте Card. Временный алиас для совместимости. */
+export type FlashcardNew = Card;
+
+/**
+ * @deprecated Исторический формат (старые поля).
+ * Оставлены опциональными, чтобы не падала типизация кода,
+ * который пока читает original_phrase/phrase_translation/text_forms и т.п.
+ */
+export interface FlashcardOld {
+  // Исторические поля верхнего уровня (встречаются в коде/импортах):
+  front?: string;
+  back?: string;
+  base_form?: string;
+  base_translation?: string;
+  word_form_translation?: string;
+  item_type?: "word" | "phrase";
+  visible?: boolean;
+
+  // Старый формат контекстов:
+  original_phrase?: string;
+  phrase_translation?: string;
+  text_forms?: string[];
+  word_form_translations?: string[];
+
+  // Переход: допускаем новые поля, чтобы миграция шла мягко
+  contexts?: Array<{
+    original_phrase?: string;
+    phrase_translation?: string;
+    text_forms?: string[];
+    word_form_translations?: string[];
+    latvian?: string;
+    russian?: string;
+    forms?: Array<{ form: string; translation: string }>;
+  }>;
+
+  [key: string]: unknown;
+}
+
+// =====================================================================
+
 export type ClaudeTool = {
   name: string;
   description?: string;

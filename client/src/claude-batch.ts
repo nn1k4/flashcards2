@@ -3,10 +3,10 @@ import { getClaudeConfig, defaultConfig } from "./config";
 
 import type { FlashcardNew, FlashcardOld } from "./types";
 
-// НОВОЕ: Определение инструмента для структурированного вывода
-const FLASHCARD_TOOL = {
+// === Инструмент для структурированного вывода карточек ===
+export const FLASHCARD_TOOL = {
   name: "create_flashcards",
-  description: "Создает структурированные флэшкарты для изучения латышского языка",
+  description: "Создает структурированные флэшкарты (слова и фразы) для изучения латышского языка",
   input_schema: {
     type: "object",
     properties: {
@@ -15,42 +15,89 @@ const FLASHCARD_TOOL = {
         items: {
           type: "object",
           properties: {
-            front: { type: "string", description: "Латышское слово в тексте" },
-            back: { type: "string", description: "Русский перевод базовой формы" },
-            base_form: { type: "string", description: "Базовая форма латышского слова" },
-            base_translation: { type: "string", description: "Перевод базовой формы" },
-            word_form_translation: {
-              type: "string",
-              description: "Перевод конкретной формы слова",
-            },
-            original_phrase: { type: "string", description: "Оригинальное предложение" },
-            phrase_translation: { type: "string", description: "Перевод предложения" },
-            text_forms: {
+            unit: { type: "string", enum: ["word", "phrase"] }, // 'word' | 'phrase'
+            base_form: { type: "string", description: "Лемма или каноническая фраза" },
+            base_translation: { type: "string", description: "Перевод леммы/фразы (fallback)" },
+            contexts: {
               type: "array",
-              items: { type: "string" },
-              description: "Формы слова в тексте",
-            },
-            item_type: {
-              type: "string",
-              enum: ["word", "phrase"],
-              description: "Тип элемента",
+              items: {
+                type: "object",
+                properties: {
+                  latvian: { type: "string", description: "Исходное предложение/фраза (lv)" },
+                  russian: { type: "string", description: "Перевод предложения/фразы (ru)" },
+                  forms: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        form: { type: "string", description: "Точная форма из текста" },
+                        translation: { type: "string", description: "Перевод этой формы" },
+                      },
+                      required: ["form", "translation"],
+                    },
+                  },
+                },
+                required: ["latvian", "russian", "forms"],
+              },
             },
           },
-          required: [
-            "front",
-            "back",
-            "base_form",
-            "base_translation",
-            "original_phrase",
-            "phrase_translation",
-          ],
+          required: ["unit", "base_form", "base_translation", "contexts"],
         },
-        description: "Массив флэшкарт",
       },
     },
     required: ["flashcards"],
   },
-};
+} as const;
+
+// === Генератор промпта для извлечения слов и фраз ===
+// enablePhraseExtraction: если true — добавлять фразовые карточки, иначе только слово-уровень.
+// prevText/nextText: соседние предложения как дополнительный контекст (если есть).
+export function buildFlashcardPrompt(params: {
+  chunkText: string;
+  chunkIndex: number;
+  totalChunks: number;
+  enablePhraseExtraction: boolean;
+  prevText?: string;
+  nextText?: string;
+}) {
+  const { chunkText, chunkIndex, totalChunks, enablePhraseExtraction, prevText, nextText } = params;
+
+  // Примеры новой структуры
+  const exampleWord = `{"unit":"word","base_form":"māja","base_translation":"дом","contexts":[{"latvian":"Es esmu mājā.","russian":"Я в доме.","forms":[{"form":"mājā","translation":"в доме"}]}]}`;
+  const examplePhrase = `{"unit":"phrase","base_form":"dzimšanas diena","base_translation":"день рождения","contexts":[{"latvian":"Mēs svinam dzimšanas dienu.","russian":"Мы празднуем день рождения.","forms":[{"form":"dzimšanas dienu","translation":"день рождения (вин.)"}]}]}`;
+
+  const contextSection =
+    prevText || nextText
+      ? `\nДополнительный контекст:
+- Предыдущий фрагмент: ${prevText ?? "(нет)"}
+- Следующий фрагмент: ${nextText ?? "(нет)"}\n`
+      : "";
+
+  // Инструкция под новую схему Card и tool_use
+  return [
+    `Ты — помощник по лингвистике латышского языка.`,
+    `Задача: извлечь из текста ${
+      enablePhraseExtraction ? "ВСЕ слова и релевантные фразы" : "ВСЕ индивидуальные слова"
+    } и вернуть структурированные карточки через инструмент create_flashcards (ровно один вызов).`,
+    `Текст чанка [${chunkIndex + 1}/${totalChunks}]:\n${chunkText}`,
+    contextSection,
+    `Требования к данным каждой карточки (новая единая модель Card):
+- unit: "word" или "phrase"
+- base_form: лемма (для слова) или каноническая фраза
+- base_translation: общий перевод (fallback)
+- contexts: массив контекстов; у каждого:
+  - latvian: исходное предложение/фраза (lv)
+  - russian: перевод предложения/фразы (ru)
+  - forms: массив { form, translation } для реально встретившихся форм/словоформ или слов во фразе`,
+    `Примеры корректной записи:
+WORD:\n${exampleWord}\nPHRASE:\n${examplePhrase}`,
+    `Правила:
+1) Используй инструмент create_flashcards ОДИН раз, передав объект вида { "flashcards": Card[] }.
+2) Если фразы отключены, генерируй только unit="word".
+3) НЕ добавляй никаких пояснений вне tool_use. Никакого Markdown.
+4) Соблюдай JSON-валидность (без пропусков обязательных полей).`,
+  ].join("\n");
+}
 
 // Простая генерация промпта, повторяет логику из useProcessing
 function buildPrompt(

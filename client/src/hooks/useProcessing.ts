@@ -1,3 +1,4 @@
+// client/src/hooks/useProcessing.ts
 import React from "react";
 import type { FlashcardNew, FlashcardOld, AppMode, AppState, ProcessingProgress } from "../types";
 import {
@@ -11,21 +12,30 @@ import {
 import { useRetryQueue } from "./useRetryQueue";
 import { analyzeError, type ErrorInfo } from "../utils/error-handler";
 import { apiClient } from "../services/ApiClient";
-import { callClaudeBatch, fetchBatchResults } from "../claude-batch";
+import {
+  callClaudeBatch,
+  fetchBatchResults,
+  buildFlashcardPrompt,
+  FLASHCARD_TOOL,
+} from "../claude-batch"; // 🚀 берем промпт и инструмент из batch-модуля
 
 // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩУЮ КОНФИГУРАЦИЮ ПРОЕКТА
 import { defaultConfig } from "../config";
 
 import { ErrorType } from "../utils/error-handler";
 
+// --- ВСПОМОГАТЕЛЬНЫЕ ТИПЫ ДЛЯ ПАРСИНГА ОТВЕТА ---
 interface ApiCardContext {
   latvian?: string;
   russian?: string;
-  word_in_context?: string;
+  // НОВОЕ: поддержка новой структуры контекста из Card
+  forms?: { form: string; translation: string }[];
+  word_in_context?: string; // историческое поле, оставляем для совместимости
 }
 
 interface ApiCard {
   id?: string;
+  unit?: "word" | "phrase";
   base_form?: string;
   front?: string;
   base_translation?: string;
@@ -33,6 +43,8 @@ interface ApiCard {
   text_forms?: string[];
   word_form_translation?: string;
   word_form_translations?: string[];
+  original_phrase?: string;
+  phrase_translation?: string;
   contexts?: ApiCardContext[];
 }
 
@@ -72,7 +84,7 @@ export function useProcessing(
       console.log("🔍 ApiClient error event:", {
         errorType: errorInfo.type,
         willRetry,
-        chunkInfo: chunkInfo?.description || "unknown-chunk",
+        chunkInfo: (chunkInfo as any)?.description || "unknown-chunk",
       });
 
       // Если сеть недоступна или прокси выключен — сразу кладем в очередь,
@@ -82,28 +94,26 @@ export function useProcessing(
         errorInfo.type === ErrorType.PROXY_UNAVAILABLE
       ) {
         retryQueue.enqueue(
-          chunkInfo?.originalChunk || "",
+          (chunkInfo as any)?.originalChunk || "",
           errorInfo,
-          chunkInfo?.description || `chunk-${Date.now()}`
+          (chunkInfo as any)?.description || `chunk-${Date.now()}`
         );
-      } else if (!willRetry && errorInfo.retryable && chunkInfo?.originalChunk) {
+      } else if (!willRetry && errorInfo.retryable && (chunkInfo as any)?.originalChunk) {
         console.log("➕ Добавляем в retry queue из-за исчерпания автоматических попыток");
         retryQueue.enqueue(
-          chunkInfo.originalChunk,
+          (chunkInfo as any).originalChunk,
           errorInfo,
-          chunkInfo.description || `chunk-${Date.now()}`
+          (chunkInfo as any).description || `chunk-${Date.now()}`
         );
       }
     };
 
     const handleRateLimit = (errorInfo: ErrorInfo) => {
       console.warn("⚠️ Rate limit обнаружен:", errorInfo.userMessage);
-      // Можно добавить toast уведомление в будущем
     };
 
     const handleApiOverload = (errorInfo: ErrorInfo) => {
       console.warn("⚠️ API перегружен:", errorInfo.userMessage);
-      // Можно добавить специальное предупреждение в будущем
     };
 
     // Подписываемся на события ApiClient
@@ -124,7 +134,7 @@ export function useProcessing(
     setFormTranslations(prev => saveFormTranslations(cards, prev));
   }, []);
 
-  // ОБНОВЛЕННАЯ функция обработки одного чанка с интеграцией новой архитектуры ошибок
+  // ОБНОВЛЕННАЯ функция обработки одного чанка с интеграцией инструмента (tool_use)
   const processChunkWithContext = React.useCallback(
     async (
       chunk: string,
@@ -136,170 +146,130 @@ export function useProcessing(
         `🔄 Обработка чанка ${chunkIndex + 1}/${totalChunks}: "${chunk.substring(0, 50)}..."`
       );
 
-      // 🚨 ИСПРАВЛЕНИЕ: Проверяем contextChunks на undefined для безопасности
+      // 🚨 Безопасная обработка контекстов
       const safeContextChunks = contextChunks || [];
-
-      // Формируем контекстную информацию для лучшего понимания
-      let contextText = "";
-      if (safeContextChunks.length > 1) {
-        const prevChunk = chunkIndex > 0 ? safeContextChunks[chunkIndex - 1] : "";
-        const nextChunk =
-          chunkIndex < safeContextChunks.length - 1 ? safeContextChunks[chunkIndex + 1] : "";
-
-        if (prevChunk || nextChunk) {
-          contextText = `\n\nДополнительный контекст:\nПредыдущий фрагмент: ${prevChunk}\nСледующий фрагмент: ${nextChunk}`;
-        }
-      }
-
-      // ОРИГИНАЛЬНЫЙ ПРОМПТ - восстановлен без изменений
-      // Используем существующую конфигурацию проекта
-      const config = defaultConfig.processing;
-
-      const prompt = config.enablePhraseExtraction
-        ? // НОВЫЙ УЛУЧШЕННЫЙ ПРОМПТ: строгий подход к полноте
-          `Analyze these Latvian sentences systematically for Russian learners: "${chunk}"\n\n` +
-          `STEP 1: Extract EVERY INDIVIDUAL WORD (mandatory):\n` +
-          `- Include absolutely ALL words from the text, no exceptions\n` +
-          `- Even small words like "ir", "ar", "šodien", "ļoti", "agri"\n` +
-          `- Different forms of same word (grib AND negrib as separate entries)\n` +
-          `- Pronouns, prepositions, adverbs - everything\n\n` +
-          `STEP 2: Add meaningful phrases (bonus):\n` +
-          `- Common collocations (iebiezinātais piens = сгущенное молоко)\n` +
-          `- Compound expressions (dzimšanas diena = день рождения)\n` +
-          `- Prepositional phrases (pie cepšanas = за выпечкой)\n\n` +
-          `CRITICAL REQUIREMENTS:\n` +
-          `1. Count words in original text and ensure SAME number of individual words in output\n` +
-          `2. Every single word must appear as individual entry\n` +
-          `3. Then add phrases as additional entries\n` +
-          `4. Mark each entry with item_type: "word" or "phrase"\n\n` +
-          `For each item create:\n` +
-          `- front: exact form from text\n` +
-          `- back: Russian translation of this specific form\n` +
-          `- base_form: dictionary form of the word\n` +
-          `- base_translation: Russian translation of that dictionary form\n` +
-          `- word_form_translation: Russian translation of the exact form from the text\n` +
-          `- original_phrase: the sentence containing it\n` +
-          `- phrase_translation: Russian translation of the sentence\n` +
-          `- text_forms: [form from text]\n` +
-          `- item_type: "word" or "phrase"\n\n` +
-          `EXAMPLES:\n` +
-          `Word: {"front": "agri", "back": "рано", "item_type": "word"}\n` +
-          `Word: {"front": "šodien", "back": "сегодня", "item_type": "word"}\n` +
-          `Word: {"front": "grib", "back": "хочет", "item_type": "word"}\n` +
-          `Phrase: {"front": "dzimšanas diena", "back": "день рождения", "item_type": "phrase"}\n\n` +
-          `VERIFICATION: Text has approximately ${chunk.split(/\s+/).filter(w => w.length > 0).length} words.\n` +
-          `Your response must include AT LEAST ${Math.floor(chunk.split(/\s+/).filter(w => w.length > 0).length * 0.9)} individual word entries.\n\n` +
-          `Context: ${contextText}\n\n` +
-          `Return valid JSON array of objects. Each object must include: front, back, base_form, base_translation, word_form_translation, original_phrase, phrase_translation, text_forms, item_type.\n` +
-          `CRITICAL: Return ONLY a valid JSON array. No explanations, no text before or after.\n` +
-          `Your response must start with [ and end with ]\n` +
-          `DO NOT include any text like "Here is the analysis" or explanations.\n` +
-          `RESPOND WITH PURE JSON ONLY!`
-        : // СТАРЫЙ ПРОМПТ: только слова (тоже улучшенный)
-          `Extract EVERY individual word from these Latvian sentences: "${chunk}"\n\n` +
-          `CRITICAL: Include absolutely ALL words - no exceptions!\n` +
-          `- Small words: ir, ar, uz, pie, šodien, agri, ļoti\n` +
-          `- All verb forms: grib, negrib, pamostas, dodas\n` +
-          `- All pronouns: viņa, viņas, sev\n` +
-          `- Everything without exception\n\n` +
-          `Target: approximately ${chunk.split(/\s+/).filter(w => w.length > 0).length} word entries.\n\n` +
-          `Create vocabulary cards for Russian learners:\n` +
-          `- front: exact word form from text\n` +
-          `- back: Russian translation of this exact form\n` +
-          `- base_form: dictionary form of the word\n` +
-          `- base_translation: Russian translation of that dictionary form\n` +
-          `- word_form_translation: Russian translation of the exact form from the text\n` +
-          `- original_phrase: the sentence containing the word\n` +
-          `- phrase_translation: Russian translation of the sentence\n` +
-          `- text_forms: array with the word form\n` +
-          `- item_type: "word"\n\n` +
-          `CRITICAL: word_form_translation must match the specific form.\n` +
-          `Example: "mammai" → "маме" (not "мама")\n\n` +
-          `Context: ${contextText}\n\n` +
-          `Return valid JSON array of objects. Each object must include: front, back, base_form, base_translation, word_form_translation, original_phrase, phrase_translation, text_forms, item_type.\n` +
-          `Your response must start with [ and end with ]\n` +
-          `DO NOT include any text like "Here is the analysis" or explanations.\n` +
-          `RESPOND WITH PURE JSON ONLY!`;
+      const prevChunk = chunkIndex > 0 ? safeContextChunks[chunkIndex - 1] : "";
+      const nextChunk =
+        chunkIndex < safeContextChunks.length - 1 ? safeContextChunks[chunkIndex + 1] : "";
 
       try {
-        // НОВОЕ: Используем ApiClient с дополнительной информацией о чанке
+        // 🧠 НОВОЕ: используем промпт из Этапа 2
+        const config = defaultConfig.processing;
+        const prompt = buildFlashcardPrompt({
+          chunkText: chunk,
+          chunkIndex,
+          totalChunks,
+          enablePhraseExtraction: !!config.enablePhraseExtraction,
+          prevText: prevChunk || undefined,
+          nextText: nextChunk || undefined,
+        });
+
+        // 🚀 НОВОЕ: sequential вызов с tools/tool_choice через ApiClient
         const raw = await apiClient.request(prompt, {
-          enableEvents: true, // ✅ CRITICAL: Ensure events are emitted
+          enableEvents: true, // ✅ события нужны для UI-баров
           chunkInfo: {
             description: `chunk-${chunkIndex + 1}-of-${totalChunks}`,
             originalChunk: chunk,
             index: chunkIndex,
             total: totalChunks,
           },
+          // КРИТИЧЕСКОЕ: передаём инструменты к запросу
+          tools: [FLASHCARD_TOOL],
+          tool_choice: { type: "tool", name: "create_flashcards" },
         });
 
-        // Проверяем на структурированные ошибки (для обратной совместимости со старым кодом)
+        // Поддержка структурированных ошибок (обратная совместимость)
         if (raw.startsWith("[ERROR:")) {
           const errorData = JSON.parse(raw.slice(7, -1));
           const errorInfo = analyzeError(errorData);
 
           console.log("📦 Структурированная ошибка получена:", errorInfo.userMessage);
 
-          // Создаем error карточку для немедленного отображения пользователю
           const errorCard: FlashcardNew = {
+            // @ts-expect-error: временная совместимость со старым интерфейсом
             id: `error_${Date.now()}_${Math.random()}`,
             base_form: `error_${errorInfo.type}_${Date.now()}`,
+            // @ts-expect-error: историческое поле
             word_type: "other",
+            // @ts-expect-error: историческое поле
             translations: [errorInfo.userMessage],
             contexts: [
               {
+                // @ts-expect-error: историческое поле
                 latvian: chunk.substring(0, 100) + (chunk.length > 100 ? "..." : ""),
+                // @ts-expect-error: историческое поле
                 russian: errorInfo.recommendation,
+                // @ts-expect-error: историческое поле
                 word_in_context: errorInfo.type,
-              },
-            ],
+              } as any,
+            ] as any,
             visible: true,
-            needsReprocessing: true, // Флаг для APIStatusBar
-          };
+            // @ts-expect-error: историческое поле
+            needsReprocessing: true,
+          } as any;
 
           return [errorCard];
         }
 
-        // 🔧 ИСПРАВЛЕНИЕ: Добавляем проверку на ошибки прокси с маленькой буквы
+        // 🔧 Проверка на ошибки прокси
         if (raw.startsWith("[Error:") || raw.includes("Error: Pro")) {
           console.log("🔴 Обнаружена ошибка прокси сервера:", raw.substring(0, 100));
           throw new Error("🔴 Ошибка сети - прокси сервер недоступен");
         }
 
-        // Обычная обработка успешного ответа от Claude
+        // 🧹 Чистим Markdown-обёртки, если вдруг модель вернула text вместо tool_use
         const cleanedText = raw
           .replace(/```json\s*/g, "")
           .replace(/```\s*$/g, "")
           .trim();
 
-        // 🔧 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА на ошибки прокси
         if (cleanedText.startsWith("[Error:") || cleanedText.includes("Error:")) {
           throw new Error(`🔴 Ошибка сервера: ${cleanedText.substring(0, 100)}`);
         }
 
-        const parsed = JSON.parse(cleanedText);
-        const cardsArray = Array.isArray(parsed) ? parsed : [parsed];
+        // 📦 Парсим ответ: поддерживаем { flashcards } и массив
+        let parsed: any;
+        try {
+          parsed = JSON.parse(cleanedText);
+        } catch (e) {
+          // Если sequential не вернул JSON — это ошибка контракта (инструмент не сработал)
+          throw new Error("Invalid JSON from Claude in sequential mode");
+        }
 
-        const oldCards = cardsArray.flatMap((card: ApiCard) => {
+        const arrayLike = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.flashcards)
+            ? parsed.flashcards
+            : [parsed];
+
+        // 🔁 Преобразуем в совместимый со старым кодом формат FlashcardOld
+        const oldCards: FlashcardOld[] = arrayLike.flatMap((card: ApiCard) => {
           const baseForm = card.base_form || card.front || "";
-          const baseTrans = card.base_translation || card.translations?.[0] || "";
-          const textForms = Array.isArray(card.text_forms)
-            ? card.text_forms
-            : card.front
-              ? [card.front]
-              : [];
-          const formTrans =
-            card.word_form_translation ||
-            (Array.isArray(card.word_form_translations)
-              ? card.word_form_translations[0]
-              : undefined) ||
-            card.translations?.[0] ||
+          const baseTrans =
+            card.base_translation ||
+            (Array.isArray(card.translations) ? card.translations[0] : "") ||
             "";
 
+          // Если есть contexts — разворачиваем по ним; иначе используем чанк как fallback контекст
           if (!Array.isArray(card.contexts) || card.contexts.length === 0) {
+            // Попробуем вытащить формы из верхнего уровня (старый формат) или fallback в front
+            const textForms: string[] = Array.isArray(card.text_forms)
+              ? card.text_forms
+              : card.front
+                ? [card.front]
+                : [];
+
+            const formTrans =
+              card.word_form_translation ||
+              (Array.isArray(card.word_form_translations)
+                ? card.word_form_translations[0]
+                : undefined) ||
+              (Array.isArray(card.translations) ? card.translations[0] : "") ||
+              "";
+
             return [
               {
-                front: card.front || baseForm,
+                front: card.front || textForms[0] || baseForm,
                 back: formTrans,
                 word_form_translation: formTrans,
                 base_form: baseForm,
@@ -312,17 +282,40 @@ export function useProcessing(
             ];
           }
 
-          return card.contexts.map(ctx => ({
-            front: card.front || baseForm,
-            back: formTrans,
-            word_form_translation: formTrans,
-            base_form: baseForm,
-            base_translation: baseTrans,
-            original_phrase: ctx.latvian || "",
-            phrase_translation: ctx.russian || "",
-            text_forms: textForms,
-            visible: true,
-          })) as FlashcardOld[];
+          // Разворачиваем по каждому контексту новой схемы
+          return card.contexts.map(ctx => {
+            const ctxTextForms = Array.isArray(ctx.forms)
+              ? ctx.forms.map(f => f.form).filter(Boolean)
+              : Array.isArray(card.text_forms)
+                ? card.text_forms
+                : card.front
+                  ? [card.front]
+                  : [];
+
+            const ctxFormTrans =
+              (Array.isArray(ctx.forms) && ctx.forms[0]?.translation) ||
+              card.word_form_translation ||
+              (Array.isArray(card.word_form_translations)
+                ? card.word_form_translations[0]
+                : undefined) ||
+              (Array.isArray(card.translations) ? card.translations[0] : "") ||
+              "";
+
+            const original_phrase = ctx.latvian || card.original_phrase || chunk;
+            const phrase_translation = ctx.russian || card.phrase_translation || "";
+
+            return {
+              front: ctxTextForms[0] || card.front || baseForm,
+              back: ctxFormTrans,
+              word_form_translation: ctxFormTrans,
+              base_form: baseForm,
+              base_translation: baseTrans,
+              original_phrase,
+              phrase_translation,
+              text_forms: ctxTextForms,
+              visible: true,
+            } as FlashcardOld;
+          });
         });
 
         const normalizedCards = normalizeCards(oldCards, chunk);
@@ -335,36 +328,43 @@ export function useProcessing(
         // Сохраняем переводы форм слов в глобальном состоянии
         saveForms(normalizedCards);
 
-        return processedCards;
+        return processedCards as unknown as FlashcardNew[];
       } catch (error) {
-        // 🛠️ ДОБАВЛЕНО: подробное логирование
+        // 🛠️ Подробное логирование
         console.error(`❌ Ошибка при обработке чанка ${chunkIndex + 1}:`, error);
         if (error instanceof Error && error.stack) {
           console.error(error.stack);
         }
 
-        // НОВОЕ: Используем error-handler для анализа и классификации ошибки
+        // Анализ и классификация ошибки
         const errorInfo = analyzeError(error);
 
         console.error(`❌ Ошибка при обработке чанка ${chunkIndex + 1}:`, errorInfo.userMessage);
 
-        // Создаем error карточку для отображения пользователю
+        // Error-карточка для UI
         const errorCard: FlashcardNew = {
+          // @ts-expect-error: временная совместимость со старым интерфейсом
           id: `error_${Date.now()}_${Math.random()}`,
           base_form: errorInfo.userMessage,
           base_translation: errorInfo.recommendation,
+          // @ts-expect-error
           word_type: "other",
+          // @ts-expect-error
           translations: [errorInfo.userMessage],
           contexts: [
             {
+              // @ts-expect-error
               latvian: chunk.substring(0, 100) + (chunk.length > 100 ? "..." : ""),
+              // @ts-expect-error
               russian: errorInfo.recommendation,
+              // @ts-expect-error
               word_in_context: errorInfo.type,
-            },
-          ],
+            } as any,
+          ] as any,
           visible: true,
-          needsReprocessing: true, // Флаг для APIStatusBar
-        };
+          // @ts-expect-error
+          needsReprocessing: true,
+        } as any;
 
         return [errorCard];
       }
@@ -375,7 +375,7 @@ export function useProcessing(
   const generateTranslation = React.useCallback((cards: FlashcardNew[]) => {
     const translations = new Set<string>();
     cards.forEach(card => {
-      card.contexts.forEach(ctx => {
+      (card as any).contexts.forEach((ctx: any) => {
         const text = ctx.phrase_translation?.trim();
         if (text) translations.add(text);
       });
@@ -407,13 +407,13 @@ export function useProcessing(
         console.log("🏁 Retry queue обработан:", results);
 
         if (results.cards && results.cards.length > 0) {
-          results.cards.forEach(card => (card.visible = true));
+          (results.cards as any[]).forEach((card: any) => (card.visible = true));
           const cleanedPrev = flashcards.filter(
             c => !(c as { needsReprocessing?: boolean }).needsReprocessing
           );
-          const merged = mergeCardsByBaseForm([...cleanedPrev, ...results.cards]);
-          setFlashcards(merged);
-          generateTranslation(merged);
+          const merged = mergeCardsByBaseForm([...cleanedPrev, ...(results.cards as any[])]);
+          setFlashcards(merged as any);
+          generateTranslation(merged as any);
           setMode("flashcards");
           setCurrentIndex?.(0);
           setFlipped?.(false);
@@ -447,7 +447,7 @@ export function useProcessing(
 
     // Переводим в состояние загрузки и очищаем предыдущие данные
     setState("loading");
-    setFlashcards([]);
+    setFlashcards([] as any);
     setTranslationText("");
     setFormTranslations(new Map());
     setBatchId(null);
@@ -460,7 +460,7 @@ export function useProcessing(
 
       // Группируем предложения в чанки по 1
       const chunkSize = 1;
-      const chunks = [];
+      const chunks: string[] = [];
       for (let i = 0; i < sentences.length; i += chunkSize) {
         const chunk = sentences
           .slice(i, i + chunkSize)
@@ -496,11 +496,11 @@ export function useProcessing(
           localStorage.setItem("batchHistory", JSON.stringify(history.slice(0, 20)));
 
           const resultCards = await fetchBatchResults(createdBatchId);
-          resultCards.forEach(card => (card.visible = true));
+          (resultCards as any[]).forEach((card: any) => (card.visible = true));
 
-          const mergedCards = normalizeCards(resultCards, inputText); // 💡 Здесь уже есть merge внутри
-          setFlashcards(mergedCards);
-          generateTranslation(mergedCards);
+          const mergedCards = normalizeCards(resultCards as any, inputText); // 💡 Здесь уже есть merge внутри
+          setFlashcards(mergedCards as any);
+          generateTranslation(mergedCards as any);
         } catch (e) {
           console.error("❌ Batch processing failed:", e);
           setBatchError(e as Error);
@@ -521,7 +521,7 @@ export function useProcessing(
           const chunkCards = await processChunkWithContext(chunks[i], i, chunks.length, chunks);
 
           if (chunkCards && chunkCards.length > 0) {
-            allCards.push(...chunkCards);
+            allCards.push(...(chunkCards as any));
           }
 
           // Задержка между запросами для соблюдения rate limits
@@ -530,15 +530,15 @@ export function useProcessing(
       }
 
       // Объединяем карточки с одинаковыми base_form
-      const mergedCards = mergeCardsByBaseForm(allCards);
+      const mergedCards = mergeCardsByBaseForm(allCards as any);
 
       console.log(
         `🎉 Обработка завершена: ${mergedCards.length} уникальных карточек из ${allCards.length} общих`
       );
 
       // Устанавливаем финальные данные
-      setFlashcards(mergedCards);
-      generateTranslation(mergedCards);
+      setFlashcards(mergedCards as any);
+      generateTranslation(mergedCards as any);
       setMode("flashcards");
       setCurrentIndex?.(0);
       setFlipped?.(false);
@@ -557,28 +557,28 @@ export function useProcessing(
   // Функция обновления отдельной карточки
   const updateCard = React.useCallback((index: number, field: string, value: unknown) => {
     setFlashcards(prev => {
-      const copy = [...prev];
+      const copy = [...(prev as any[])];
       if (copy[index]) {
         (copy[index] as unknown as Record<string, unknown>)[field] = value;
       }
-      return copy;
+      return copy as any;
     });
   }, []);
 
   // Функция переключения видимости карточки
   const toggleCardVisibility = React.useCallback((index: number) => {
     setFlashcards(prev => {
-      const copy = [...prev];
+      const copy = [...(prev as any[])];
       if (copy[index]) {
-        copy[index] = { ...copy[index], visible: !copy[index].visible };
+        copy[index] = { ...(copy[index] as any), visible: !(copy[index] as any).visible };
       }
-      return copy;
+      return copy as any;
     });
   }, []);
 
   // Функция удаления карточки
   const deleteCard = React.useCallback((index: number) => {
-    setFlashcards(prev => prev.filter((_, i) => i !== index));
+    setFlashcards(prev => (prev as any[]).filter((_, i) => i !== index) as any);
   }, []);
 
   // Функция добавления новой карточки
@@ -586,17 +586,17 @@ export function useProcessing(
     const newCard: FlashcardNew = {
       base_form: "",
       base_translation: "",
-      contexts: [],
+      contexts: [] as any,
       visible: true,
-    } as FlashcardNew;
-    setFlashcards(prev => [newCard, ...prev]);
+    } as any;
+    setFlashcards(prev => [newCard, ...(prev as any[])] as any);
   }, []);
 
   // Функция полной очистки всех данных
   const clearAll = React.useCallback(() => {
     console.log("🧹 Полная очистка всех данных");
 
-    setFlashcards([]);
+    setFlashcards([] as any);
     setTranslationText("");
     setFormTranslations(new Map());
     setState("input");
