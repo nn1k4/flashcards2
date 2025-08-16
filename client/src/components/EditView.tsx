@@ -3,7 +3,19 @@ import type { FlashcardNew, BaseComponentProps, Context } from "../types";
 
 // ================== ВСПОМОГАТЕЛЬНЫЕ ХЕЛПЕРЫ (совместимость старой/новой схем) ==================
 function getUnit(card: any): "word" | "phrase" {
-  return card?.unit === "phrase" ? "phrase" : "word";
+  // 1) если сервер/стор уже явно проставил unit — используем его
+  const u = String(card?.unit || "").toLowerCase();
+  if (u === "word" || u === "phrase") return u as "word" | "phrase";
+
+  // 2) фолбэк: если base_form выглядит как словосочетание — считаем фразой
+  const bf = (card?.base_form || "").trim();
+  if (/\s/.test(bf)) return "phrase";
+
+  // 3) ещё один фолбэк: если первый LV-контекст содержит пробел — тоже фраза
+  const lv = String(card?.contexts?.[0]?.latvian || "");
+  if (/\s/.test(lv.trim())) return "phrase";
+
+  return "word";
 }
 
 function getContextCount(card: any): number {
