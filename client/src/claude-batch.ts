@@ -4,7 +4,7 @@ import type { Card, Context, FormEntry } from "./types";
 import { textToCards, mergeCardsByBaseForm } from "./utils/cardUtils";
 
 /* =========================================================
- * 1) Инструмент (tool) — ИМЯ ВАЖНО для tool_choice
+ * 1) Инструмент (tool) — имя используется в tool_choice
  * ========================================================= */
 export const FLASHCARD_TOOL = {
   name: "FLASHCARD_TOOL",
@@ -61,7 +61,7 @@ export const FLASHCARD_TOOL = {
 } as const;
 
 /* =========================================================
- * 2) Построение промпта (поддерживает ДВА варианта вызова)
+ * 2) Построение промпта
  * ========================================================= */
 function buildPromptForChunk(params: {
   chunkText: string;
@@ -108,8 +108,8 @@ ${examplePhrase}`,
 }
 
 /**
- * Публичная обёртка — принимает либо позиции (string, number, number, ...),
- * либо объект с полями (совместимость с кодом до рефакторинга).
+ * Публичная обёртка — совместима и с (chunk, i, total, ctx?, flag?)
+ * и с объектной формой { chunkText, chunkIndex, totalChunks, ... }.
  */
 export function buildFlashcardPrompt(
   arg1:
@@ -145,8 +145,6 @@ export function buildFlashcardPrompt(
       enablePhraseExtraction,
     });
   }
-
-  // объектная форма
   return buildPromptForChunk(arg1);
 }
 
@@ -171,7 +169,7 @@ function safeJSONParse<T = any>(s: string): T | null {
   }
 }
 
-/** Текстовая обёртка FLASHCARD_TOOL({...}) → JSON */
+/** Текстовая обёртка вида FLASHCARD_TOOL({...}) → объект */
 function parseToolEnvelope(text: string): any | null {
   const tag = `${FLASHCARD_TOOL.name}(`;
   const idx = text.indexOf(tag);
@@ -244,22 +242,23 @@ function parseMessageToCards(message: any): Card[] {
           base_translation: clean(c?.base_translation) || undefined,
           contexts: Array.isArray(c?.contexts)
             ? c.contexts
-                .map((ctx: any) => ({
-                  latvian: clean(ctx?.latvian),
-                  russian: clean(ctx?.russian),
-                  forms: Array.isArray(ctx?.forms)
-                    ? ctx.forms
-                        .map((f: any) => ({
-                          form: clean(f?.form),
-                          translation: clean(f?.translation),
-                        }))
-                        .filter((f: FormEntry) => f.form && f.translation)
-                    : [],
-                }))
-                .filter(
-                  (ctx: Context) =>
-                    ctx.latvian && ctx.russian && Array.isArray(ctx.forms) && ctx.forms.length > 0
+                .map(
+                  (ctx: any) =>
+                    [
+                      clean(ctx?.latvian),
+                      clean(ctx?.russian),
+                      Array.isArray(ctx?.forms)
+                        ? ctx.forms
+                            .map((f: any) => ({
+                              form: clean(f?.form),
+                              translation: clean(f?.translation),
+                            }))
+                            .filter((f: FormEntry) => f.form && f.translation)
+                        : [],
+                    ] as const
                 )
+                .filter(([lv, ru, forms]) => lv && ru && forms.length > 0)
+                .map(([latvian, russian, forms]) => ({ latvian, russian, forms }))
             : [],
           visible: c?.visible !== false,
         }));
@@ -312,14 +311,32 @@ function parseMessageToCards(message: any): Card[] {
 }
 
 /* =========================================================
- * 4) Batch API
+ * 4) Batch API — типы согласно официальной доке
  * ========================================================= */
-type BatchCreateResponse = { id: string; processing_status?: string };
-type BatchStatusResponse = { id: string; processing_status: string };
+export type BatchProgress = {
+  processing_status: "in_progress" | "canceling" | "ended";
+  request_counts: {
+    processing: number;
+    succeeded: number;
+    errored: number;
+    canceled: number;
+    expired: number;
+  };
+};
+
+type BatchCreateResponse = { id: string; processing_status?: BatchProgress["processing_status"] };
+
+type BatchGetResponse = {
+  id: string;
+  processing_status: BatchProgress["processing_status"];
+  request_counts: BatchProgress["request_counts"];
+  results_url?: string;
+};
 
 type BatchRequestParams = Record<string, unknown>;
 type BatchRequestItem = { custom_id: string; params: BatchRequestParams };
 
+/** Создание batch на сервере-прокси */
 export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: string }> {
   const cfg = getClaudeConfig("textProcessing");
   const requests: BatchRequestItem[] = [];
@@ -373,55 +390,70 @@ export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: stri
 }
 
 /**
- * Ждём `ended|completed|succeeded`, терпим временами 404/сетевые ошибки на статусе,
- * затем забираем JSONL результаты и склеиваем по base_form.
+ * Ожидаем единственный терминальный статус 'ended', терпим временные 404 (индексация),
+ * транслируем прогресс через onProgress, затем забираем JSONL и парсим в Card[].
  */
 export async function fetchBatchResults(
   batchId: string,
-  options?: { pollIntervalMs?: number; maxWaitMs?: number }
+  options?: { pollIntervalMs?: number; maxWaitMs?: number; initialDelayMs?: number },
+  onProgress?: (p: BatchProgress) => void
 ): Promise<Card[]> {
   const pollIntervalMs = options?.pollIntervalMs ?? 3000;
   const maxWaitMs = options?.maxWaitMs ?? 10 * 60 * 1000;
-  const start = Date.now();
+  const initialDelayMs = options?.initialDelayMs ?? 1200;
 
-  // 1) Ожидание терминального статуса
-  /* ТЕРМИНАЛЬНЫЕ СТАТУСЫ у Anthropic batch:
-   * - ended (Anthropic)
-   * - completed/succeeded (на некоторых прослойках)
-   */
+  const start = Date.now();
+  let notFoundAttempts = 0;
+
+  // небольшой initial delay — снижаем шанс раннего 404
+  await sleep(initialDelayMs);
+
+  // 1) Поллинг статуса до 'ended'
   while (true) {
-    if (Date.now() - start > maxWaitMs) throw new Error(`Timeout waiting for batch ${batchId}`);
+    if (Date.now() - start > maxWaitMs) {
+      throw new Error(`Timeout waiting for batch ${batchId}`);
+    }
 
     try {
       const st = await fetch(`http://localhost:3001/api/claude/batch/${batchId}`, {
         method: "GET",
       });
+
       if (!st.ok) {
-        // Бывает промежуточный 404 — не валимся, ждём ещё
+        if (st.status === 404) {
+          notFoundAttempts++;
+          const backoff = Math.min(pollIntervalMs * (notFoundAttempts + 1), 15000);
+          console.info(`ℹ️ batch ${batchId} not indexed yet (404). Retry in ${backoff}ms`);
+          await sleep(backoff);
+          continue;
+        }
         console.warn("⚠️ batch status non-OK:", st.status, await st.text());
         await sleep(pollIntervalMs);
         continue;
       }
 
-      const statusJson = (await st.json()) as BatchStatusResponse;
-      const p = (statusJson?.processing_status || "").toLowerCase();
+      const statusJson = (await st.json()) as BatchGetResponse;
+
+      onProgress?.({
+        processing_status: statusJson.processing_status,
+        request_counts: statusJson.request_counts,
+      });
+
+      const p = statusJson.processing_status; // 'in_progress' | 'canceling' | 'ended'
       console.log(`🛰️ Batch ${batchId} status: ${p}`);
 
-      if (p === "ended" || p === "completed" || p === "succeeded") break;
-      if (p === "failed" || p === "canceled" || p === "expired") {
-        throw new Error(`Batch ${batchId} ended with status ${p}`);
-      }
+      if (p === "ended") break; // единственный терминальный статус
+      // иначе: 'in_progress' или 'canceling' — ждём дальше
     } catch (e) {
-      // сетевые/временные проблемы — подождём и продолжим
       console.warn("⚠️ batch status fetch error:", e);
     }
 
     await sleep(pollIntervalMs);
   }
 
-  // 2) Получаем .jsonl с результатами
+  // 2) Получаем .jsonl результаты (несколько попыток с бэкоффом)
   let res: Response | null = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 6; attempt++) {
     try {
       res = await fetch(`http://localhost:3001/api/claude/batch/${batchId}/results`, {
         method: "GET",
@@ -431,7 +463,8 @@ export async function fetchBatchResults(
     } catch (e) {
       console.warn("⚠️ results fetch error:", e);
     }
-    await sleep(1500 * (attempt + 1));
+    const wait = Math.min(1500 * (attempt + 1), 8000);
+    await sleep(wait);
   }
 
   if (!res || !res.ok) {
@@ -450,6 +483,8 @@ export async function fetchBatchResults(
   for (const line of lines) {
     try {
       const obj = JSON.parse(line);
+
+      // Несколько возможных форм обёртки результата
       const message =
         obj?.result?.message ||
         obj?.message ||
@@ -458,38 +493,46 @@ export async function fetchBatchResults(
 
       if (!message) continue;
 
-      // Нормализуем в Card[]
+      // Нормальный путь — tool_use
       const cards = parseMessageToCards(message);
-      if (cards.length) collected.push(...cards);
-      else {
-        // попробуем вытащить текст и разобрать по старой схеме
-        const text = Array.isArray(message?.content)
-          ? message.content
-              .filter((p: any) => p?.type === "text" && typeof p?.text === "string")
-              .map((p: any) => p.text)
-              .join("\n")
-          : "";
-        if (text) {
-          const toolEnv = parseToolEnvelope(text);
-          if (toolEnv) {
-            const list = Array.isArray(toolEnv?.flashcards)
-              ? toolEnv.flashcards
-              : Array.isArray(toolEnv)
-                ? toolEnv
-                : [];
-            if (Array.isArray(list)) {
-              const viaTool = parseMessageToCards({
-                content: [
-                  { type: "tool_use", name: FLASHCARD_TOOL.name, input: { flashcards: list } },
-                ],
-              });
+      if (cards.length) {
+        collected.push(...cards);
+        continue;
+      }
+
+      // Попробуем вытащить текст и разобрать по обёртке/старому JSON
+      const text = Array.isArray(message?.content)
+        ? message.content
+            .filter((p: any) => p?.type === "text" && typeof p?.text === "string")
+            .map((p: any) => p.text)
+            .join("\n")
+        : "";
+
+      if (text) {
+        // FLASHCARD_TOOL({...})
+        const toolEnv = parseToolEnvelope(text);
+        if (toolEnv) {
+          const list = Array.isArray(toolEnv?.flashcards)
+            ? toolEnv.flashcards
+            : Array.isArray(toolEnv)
+              ? toolEnv
+              : [];
+          if (Array.isArray(list)) {
+            const viaTool = parseMessageToCards({
+              content: [
+                { type: "tool_use", name: FLASHCARD_TOOL.name, input: { flashcards: list } },
+              ],
+            });
+            if (viaTool.length) {
               collected.push(...viaTool);
               continue;
             }
           }
-          const old = textToCards(stripFences(text));
-          collected.push(...oldArrayToNew(old));
         }
+
+        // Старый JSON
+        const old = textToCards(stripFences(text));
+        collected.push(...oldArrayToNew(old));
       }
     } catch (e) {
       console.error("❌ JSONL parse error:", e);
@@ -503,7 +546,7 @@ export async function fetchBatchResults(
 }
 
 /* =========================================================
- * 5) Последовательный режим с tool-calling (используйте в useProcessing)
+ * 5) Последовательный режим (tool-calling)
  * ========================================================= */
 export async function processChunkWithTools(
   chunk: string,
@@ -572,6 +615,6 @@ export async function processChunkWithTools(
     if (converted.length > 0) return mergeCardsByBaseForm(ensureVisible(converted));
   }
 
-  // Пусто — вернём [], пусть наверху решат, что с этим делать
+  // Пусто — вернём [], верхний слой сам решит, что делать
   return [];
 }

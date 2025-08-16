@@ -7,14 +7,16 @@ import { mergeCardsByBaseForm, saveFormTranslations, splitIntoSentences } from "
 import { useRetryQueue } from "./useRetryQueue";
 import { analyzeError, type ErrorInfo, ErrorType } from "../utils/error-handler";
 
-// Клиент событий/ретраев (оставляем подписку на события)
+// Клиент событий/ретраев
 import { apiClient } from "../services/ApiClient";
 
 // Batch + последовательный tool-calling
-import { callClaudeBatch, fetchBatchResults, processChunkWithTools } from "../claude-batch";
-
-// Конфиг (для флагов интерфейса и т.п.)
-import { defaultConfig } from "../config";
+import {
+  callClaudeBatch,
+  fetchBatchResults,
+  processChunkWithTools,
+  type BatchProgress,
+} from "../claude-batch";
 
 /** Хук верхнего уровня для обработки текста в карточки */
 export function useProcessing(
@@ -99,7 +101,7 @@ export function useProcessing(
     setFormTranslations(prev => saveFormTranslations(cards as any, prev));
   }, []);
 
-  // Последовательная обработка одного чанка (используем стабильный tool-calling слой)
+  // Последовательная обработка одного чанка
   const processChunkWithContext = React.useCallback(
     async (
       chunk: string,
@@ -112,7 +114,6 @@ export function useProcessing(
       );
 
       try {
-        // Возвращает уже нормализованные Card[] (новая схема)
         const cards = await processChunkWithTools(
           chunk,
           chunkIndex,
@@ -120,10 +121,7 @@ export function useProcessing(
           contextChunks || []
         );
 
-        // На всякий случай сольём повторяющиеся base_form в чанкe (idempotent)
         const merged = mergeCardsByBaseForm(cards as any) as FlashcardNew[];
-
-        // Сохраняем формы для глобальной таблицы переводов форм
         saveForms(merged);
 
         console.log(`✅ Чанк ${chunkIndex + 1} успешно обработан: ${merged.length} карточек`);
@@ -132,7 +130,6 @@ export function useProcessing(
         console.error(`❌ Ошибка при обработке чанка ${chunkIndex + 1}:`, error);
         const errorInfo = analyzeError(error);
 
-        // Карточка-ошибка для UI (видима и помечена к повторной обработке)
         const errorCard: FlashcardNew = {
           // @ts-expect-error: временная совместимость со старым интерфейсом
           id: `error_${Date.now()}_${Math.random()}`,
@@ -140,14 +137,13 @@ export function useProcessing(
           base_translation: errorInfo.recommendation,
           contexts: [
             {
-              // поля в терминах новой схемы
-              // @ts-expect-error: допускаем старые поля для обратной совместимости UI
+              // поддерживаем старые поля в UI
+              // @ts-expect-error
               latvian: chunk.substring(0, 100) + (chunk.length > 100 ? "..." : ""),
               // @ts-expect-error
               russian: errorInfo.recommendation,
               // @ts-expect-error
               word_in_context: errorInfo.type,
-              // новая схема допускает forms, но тут можно опустить
             } as any,
           ],
           visible: true,
@@ -166,7 +162,6 @@ export function useProcessing(
     const translations = new Set<string>();
     cards.forEach(card => {
       (card as any).contexts?.forEach((ctx: any) => {
-        // поддерживаем и новую (`russian`), и старую (`phrase_translation`) схемы
         const t = (ctx?.russian || ctx?.phrase_translation || "").trim();
         if (t) translations.add(t);
       });
@@ -227,6 +222,13 @@ export function useProcessing(
     [retryQueue.processQueue, flashcards, setFlashcards, setState, setMode, generateTranslation]
   );
 
+  // Прогрессовая строка для batch
+  const batchStepText = React.useCallback((p: BatchProgress, total: number) => {
+    const { processing, succeeded, errored, canceled, expired } = p.request_counts;
+    const done = succeeded + errored + canceled + expired;
+    return `Batch ${p.processing_status}: ${done}/${total} (ok ${succeeded}, err ${errored}, canceled ${canceled}, expired ${expired})`;
+  }, []);
+
   // Основная функция обработки текста
   const processText = React.useCallback(async () => {
     if (!inputText.trim()) {
@@ -278,15 +280,27 @@ export function useProcessing(
           const { batchId: createdBatchId } = await callClaudeBatch(chunks);
           setBatchId(createdBatchId);
 
-          // сохраним историю
+          // история
           const history = JSON.parse(localStorage.getItem("batchHistory") || "[]");
           history.unshift(createdBatchId);
           localStorage.setItem("batchHistory", JSON.stringify(history.slice(0, 20)));
 
-          const resultCards = await fetchBatchResults(createdBatchId); // уже слиты по base_form
+          const resultCards = await fetchBatchResults(
+            createdBatchId,
+            { pollIntervalMs: 3000, maxWaitMs: 10 * 60 * 1000, initialDelayMs: 1200 },
+            p => {
+              const { succeeded, errored, canceled, expired } = p.request_counts;
+              const current = succeeded + errored + canceled + expired;
+              setProcessingProgress({
+                current,
+                total: chunks.length,
+                step: batchStepText(p, chunks.length),
+              });
+            }
+          );
+
           (resultCards as any[]).forEach((c: any) => (c.visible = true));
 
-          // финальная сборка
           const mergedCards = mergeCardsByBaseForm(resultCards as any);
           setFlashcards(mergedCards as any);
           generateTranslation(mergedCards as any);
@@ -294,6 +308,7 @@ export function useProcessing(
           console.error("❌ Batch processing failed:", e);
           setBatchError(e as Error);
           setState("input");
+          setProcessingProgress({ current: 0, total: 0, step: "Ошибка batch" });
           return;
         }
       } else {
@@ -335,7 +350,14 @@ export function useProcessing(
       setState("input");
       setProcessingProgress({ current: 0, total: 0, step: "Ошибка обработки" });
     }
-  }, [inputText, isBatchEnabled, processChunkWithContext, setMode, generateTranslation]);
+  }, [
+    inputText,
+    isBatchEnabled,
+    processChunkWithContext,
+    setMode,
+    generateTranslation,
+    batchStepText,
+  ]);
 
   // CRUD по карточкам
   const updateCard = React.useCallback((index: number, field: string, value: unknown) => {
