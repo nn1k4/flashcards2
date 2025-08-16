@@ -4,15 +4,12 @@ import type { FlashcardNew, BaseComponentProps, Context } from "../types";
 
 /* ===================== Helpers (new/old schema friendly) ===================== */
 function getUnit(card: any): "word" | "phrase" {
-  // 1) explicit from data
   const u = String(card?.unit || "").toLowerCase();
   if (u === "word" || u === "phrase") return u as "word" | "phrase";
 
-  // 2) base_form looks like a phrase
   const bf = (card?.base_form || "").trim();
   if (/\s/.test(bf)) return "phrase";
 
-  // 3) first LV context looks like a phrase
   const lv = String(card?.contexts?.[0]?.latvian || card?.contexts?.[0]?.original_phrase || "");
   if (/\s/.test(lv.trim())) return "phrase";
 
@@ -32,12 +29,9 @@ function getPreviewContext(card: any): { lv: string; ru: string } | null {
   return { lv, ru };
 }
 
-function stableKeyOf(card: any, fallback: string) {
-  const bf = (card?.base_form || "").toString();
-  const bt = (card?.base_translation || "").toString();
-  const u = getUnit(card);
-  // Prefer an id if present, otherwise a composite key
-  return (card?.id as string) || `${u}::${bf}::${bt}` || fallback;
+/** Стабильный ключ строки: card.id если есть, иначе фиксированный индекс исходного массива */
+function rowKeyOf(card: any, realIndex: number) {
+  return typeof card?.id === "string" && card.id ? card.id : `row-${realIndex}`;
 }
 
 /* ===================== Props ===================== */
@@ -81,7 +75,7 @@ export const EditView: React.FC<EditViewProps> = ({
     });
   }, [flashcards, searchTerm]);
 
-  // Map filteredCards -> indices in the source array (stable addressing)
+  // Map filteredCards -> indices in the source array (stable addressing of original list)
   const indexMap = useMemo(
     () => filteredCards.map(c => flashcards.indexOf(c)),
     [filteredCards, flashcards]
@@ -95,15 +89,16 @@ export const EditView: React.FC<EditViewProps> = ({
   const pageCards = filteredCards.slice(startIndex, endIndex);
   const pageIndices = indexMap.slice(startIndex, endIndex);
 
-  // Fallback resolver if referential equality is lost
+  // Fallback real index resolver in case referential equality is lost
   const getRealIndex = (card: any, fallback: number) => {
     const idx = flashcards.indexOf(card);
     if (idx !== -1) return idx;
-    const bf = card?.base_form;
-    const bt = card?.base_translation;
-    const u = getUnit(card);
+    // As an extra guard, find by stable fields if needed
     const byFields = flashcards.findIndex(
-      c => c.base_form === bf && c.base_translation === bt && getUnit(c) === u
+      c =>
+        c.base_form === card?.base_form &&
+        c.base_translation === card?.base_translation &&
+        getUnit(c) === getUnit(card)
     );
     return byFields !== -1 ? byFields : fallback;
   };
@@ -212,6 +207,7 @@ export const EditView: React.FC<EditViewProps> = ({
               {pageCards.map((card, idx) => {
                 const fallbackIdx = pageIndices[idx];
                 const realIndex = getRealIndex(card, fallbackIdx);
+
                 const unit = getUnit(card);
                 const isVisible = card.visible !== false;
                 const needsReprocessing =
@@ -221,7 +217,7 @@ export const EditView: React.FC<EditViewProps> = ({
 
                 return (
                   <tr
-                    key={stableKeyOf(card, String(realIndex))}
+                    key={rowKeyOf(card, realIndex)} // 🔒 СТАБИЛЬНЫЙ КЛЮЧ: больше не зависит от base_form/base_translation
                     className={`${!isVisible ? "opacity-50 bg-gray-100" : ""}`}
                     data-testid={`card-row-${realIndex}`}
                   >
