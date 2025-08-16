@@ -18,6 +18,62 @@ import {
   type BatchProgress,
 } from "../claude-batch";
 
+/** Хелперы нормализации / сопоставления LV→RU */
+const norm = (s: string) =>
+  s
+    ?.replace(/\s+/g, " ")
+    .replace(/\n+/g, " ")
+    .replace(/[«»“”"(){}\[\]—–-]/g, " ")
+    .trim()
+    .toLowerCase() || "";
+
+const normKey = (s: string) =>
+  norm(s)
+    .replace(/[.?!…]+$/u, "")
+    .trim();
+
+const belongsToChunk = (lv: string, chunk: string) => {
+  const a = normKey(lv);
+  const b = normKey(chunk);
+  return !!a && !!b && (a === b || b.includes(a) || a.includes(b));
+};
+
+function ensureSentenceEnding(s: string) {
+  return /[.?!]$/.test(s) ? s : s + ".";
+}
+
+/** Сборка единого перевода в порядке исходных LV-предложений */
+function assembleTranslationBySentences(chunks: string[], cards: FlashcardNew[]): string {
+  const sentencesRu: string[] = [];
+
+  for (const chunk of chunks) {
+    const ruPieces: string[] = [];
+    const seen = new Set<string>();
+
+    for (const card of cards) {
+      for (const ctx of (card?.contexts as any[]) || []) {
+        const lv = (ctx?.latvian || "").toString();
+        const ru = (ctx?.russian || "").toString().trim();
+        if (!lv || !ru) continue;
+        if (!belongsToChunk(lv, chunk)) continue;
+        if (!seen.has(ru)) {
+          seen.add(ru);
+          ruPieces.push(ru);
+        }
+      }
+    }
+
+    if (ruPieces.length === 0) continue;
+
+    // Если одна строка включает все остальные — берём её (самая «полная»)
+    const subsuming = ruPieces.find(r => ruPieces.every(o => r.includes(o)));
+    const sentence = ensureSentenceEnding(subsuming || ruPieces.join(" "));
+    sentencesRu.push(sentence);
+  }
+
+  return sentencesRu.join(" ");
+}
+
 /** Хук верхнего уровня для обработки текста в карточки */
 export function useProcessing(
   inputText: string,
@@ -39,6 +95,9 @@ export function useProcessing(
   const [isBatchEnabled, setBatchEnabled] = React.useState(false);
   const [batchId, setBatchId] = React.useState<string | null>(null);
   const [batchError, setBatchError] = React.useState<Error | null>(null);
+
+  // Сохраняем нормализованные LV-предложения (для сборки перевода в порядке текста)
+  const [sourceSentencesNorm, setSourceSentencesNorm] = React.useState<string[]>([]);
 
   // Персистентная retry-очередь
   const retryQueue = useRetryQueue();
@@ -109,9 +168,8 @@ export function useProcessing(
       totalChunks: number,
       contextChunks?: string[]
     ): Promise<FlashcardNew[]> => {
-      console.log(
-        `🔄 Обработка чанка ${chunkIndex + 1}/${totalChunks}: "${chunk.substring(0, 50)}..."`
-      );
+      const logHead = `🔄 Обработка чанка ${chunkIndex + 1}/${totalChunks}`;
+      console.log(`${logHead}: "${chunk.substring(0, 80)}${chunk.length > 80 ? "..." : ""}"`);
 
       try {
         const cards = await processChunkWithTools(
@@ -131,7 +189,7 @@ export function useProcessing(
         const errorInfo = analyzeError(error);
 
         const errorCard: FlashcardNew = {
-          // @ts-expect-error: временная совместимость со старым интерфейсом
+          // @ts-expect-error временная совместимость со старым интерфейсом
           id: `error_${Date.now()}_${Math.random()}`,
           base_form: errorInfo.userMessage,
           base_translation: errorInfo.recommendation,
@@ -139,7 +197,7 @@ export function useProcessing(
             {
               // поддерживаем старые поля в UI
               // @ts-expect-error
-              latvian: chunk.substring(0, 100) + (chunk.length > 100 ? "..." : ""),
+              latvian: chunk.substring(0, 120) + (chunk.length > 120 ? "..." : ""),
               // @ts-expect-error
               russian: errorInfo.recommendation,
               // @ts-expect-error
@@ -157,17 +215,28 @@ export function useProcessing(
     [saveForms]
   );
 
-  // Собираем общий перевод по контекстам карточек
-  const generateTranslation = React.useCallback((cards: FlashcardNew[]) => {
-    const translations = new Set<string>();
-    cards.forEach(card => {
-      (card as any).contexts?.forEach((ctx: any) => {
-        const t = (ctx?.russian || ctx?.phrase_translation || "").trim();
-        if (t) translations.add(t);
-      });
-    });
-    setTranslationText(Array.from(translations).join(" "));
-  }, []);
+  /** Генерация единого RU-перевода из карточек с учётом порядка LV-предложений */
+  const generateTranslation = React.useCallback(
+    (cards: FlashcardNew[], orderedLvSentencesNorm: string[]) => {
+      const t = assembleTranslationBySentences(orderedLvSentencesNorm, cards);
+      if (t) {
+        setTranslationText(t);
+        return;
+      }
+
+      // Надёжный fallback: объединяем уникальные contexts.russian
+      const fallback = Array.from(
+        new Set(
+          (cards as any[])
+            .flatMap(c => (c?.contexts || []).map((ctx: any) => (ctx?.russian || "").trim()))
+            .filter(Boolean)
+        )
+      ).join(" ");
+
+      setTranslationText(fallback);
+    },
+    []
+  );
 
   // Обработка retry-очереди
   const processRetryQueue = React.useCallback(
@@ -200,7 +269,7 @@ export function useProcessing(
           ]);
 
           setFlashcards(merged as any);
-          generateTranslation(merged as any);
+          generateTranslation(merged as any, sourceSentencesNorm);
           setMode("flashcards");
           setCurrentIndex?.(0);
           setFlipped?.(false);
@@ -219,14 +288,22 @@ export function useProcessing(
         setProcessingProgress({ current: 0, total: 0, step: "" });
       }
     },
-    [retryQueue.processQueue, flashcards, setFlashcards, setState, setMode, generateTranslation]
+    [
+      retryQueue.processQueue,
+      flashcards,
+      setFlashcards,
+      setState,
+      setMode,
+      generateTranslation,
+      sourceSentencesNorm,
+    ]
   );
 
   // Прогрессовая строка для batch
   const batchStepText = React.useCallback((p: BatchProgress, total: number) => {
     const { processing, succeeded, errored, canceled, expired } = p.request_counts;
     const done = succeeded + errored + canceled + expired;
-    return `Batch ${p.processing_status}: ${done}/${total} (ok ${succeeded}, err ${errored}, canceled ${canceled}, expired ${expired})`;
+    return `Batch ${p.processing_status}: ${done}/${total} (ok ${succeeded}, err ${errored}, canceled ${canceled}, expired ${expired}, processing ${processing})`;
   }, []);
 
   // Основная функция обработки текста
@@ -246,16 +323,21 @@ export function useProcessing(
 
     try {
       // Разбиваем на предложения
-      const sentences = splitIntoSentences(inputText);
-      console.log(`📝 Текст разбит на ${sentences.length} предложений`);
+      const sentencesRaw = splitIntoSentences(inputText);
+      // Нормализуем (убираем переносы, лишние пробелы, регистр/знаки для ключа)
+      const sentencesNorm = sentencesRaw.map(s => s.replace(/\s*\n\s*/g, " ").trim());
+      setSourceSentencesNorm(sentencesNorm);
 
-      // Формируем чанки (по одному предложению)
+      console.log(`📝 Текст разбит на ${sentencesRaw.length} предложений`);
+
+      // Формируем чанки (по одному предложению) — и сразу убираем переносы
       const chunkSize = 1;
       const chunks: string[] = [];
-      for (let i = 0; i < sentences.length; i += chunkSize) {
-        const chunk = sentences
+      for (let i = 0; i < sentencesRaw.length; i += chunkSize) {
+        const chunk = sentencesRaw
           .slice(i, i + chunkSize)
           .join(" ")
+          .replace(/\s*\n\s*/g, " ")
           .trim();
         if (chunk) chunks.push(chunk);
       }
@@ -280,7 +362,7 @@ export function useProcessing(
           const { batchId: createdBatchId } = await callClaudeBatch(chunks);
           setBatchId(createdBatchId);
 
-          // история
+          // история batch
           const history = JSON.parse(localStorage.getItem("batchHistory") || "[]");
           history.unshift(createdBatchId);
           localStorage.setItem("batchHistory", JSON.stringify(history.slice(0, 20)));
@@ -288,7 +370,7 @@ export function useProcessing(
           const resultCards = await fetchBatchResults(
             createdBatchId,
             { pollIntervalMs: 3000, maxWaitMs: 10 * 60 * 1000, initialDelayMs: 1200 },
-            p => {
+            (p: BatchProgress) => {
               const { succeeded, errored, canceled, expired } = p.request_counts;
               const current = succeeded + errored + canceled + expired;
               setProcessingProgress({
@@ -300,10 +382,10 @@ export function useProcessing(
           );
 
           (resultCards as any[]).forEach((c: any) => (c.visible = true));
-
           const mergedCards = mergeCardsByBaseForm(resultCards as any);
+
           setFlashcards(mergedCards as any);
-          generateTranslation(mergedCards as any);
+          generateTranslation(mergedCards as any, sentencesNorm);
         } catch (e) {
           console.error("❌ Batch processing failed:", e);
           setBatchError(e as Error);
@@ -338,7 +420,7 @@ export function useProcessing(
         );
 
         setFlashcards(mergedCards as any);
-        generateTranslation(mergedCards as any);
+        generateTranslation(mergedCards as any, sentencesNorm);
       }
 
       setMode("flashcards");

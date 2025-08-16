@@ -4,7 +4,55 @@ import type { Card, Context, FormEntry } from "./types";
 import { textToCards, mergeCardsByBaseForm } from "./utils/cardUtils";
 
 /* =========================================================
- * 1) Инструмент (tool) — имя используется в tool_choice
+ * 0) Вспомогательные утилиты (нормализация/парсинг)
+ * ========================================================= */
+
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+const clean = (s: unknown) => (s == null ? "" : String(s).trim());
+
+/** Склейка переносов в пробелы + trim (для промпта и последующей валидации) */
+function normalizeForPrompt(s?: string) {
+  if (!s) return "(нет)";
+  return s
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Снятие ограждений ```...``` (+ язык) и лишних обрезов */
+function stripFences(s: string) {
+  return s
+    .replace(/^```[a-zA-Z0-9_-]*\s*/g, "")
+    .replace(/```$/g, "")
+    .trim();
+}
+
+/** JSON.parse с безопасной нефатальной ошибкой */
+function safeJSONParse<T = any>(s: string): T | null {
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Попытка распаковать текстовую обёртку вида FLASHCARD_TOOL({...}) → объект */
+function parseToolEnvelope(text: string): any | null {
+  const name = FLASHCARD_TOOL.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Разрешаем любые пробелы перед скобкой
+  const m = text.match(new RegExp(`${name}\\s*\\(([\\s\\S]*)\\)\\s*$`));
+  if (!m) return null;
+  const inside = stripFences(m[1]?.trim() ?? "");
+  return safeJSONParse(inside);
+}
+
+/** Гарантируем visible=true для всех карточек (если не указано иное) */
+function ensureVisible(cards: Card[]): Card[] {
+  return cards.map(c => ({ ...c, visible: c.visible !== false }));
+}
+
+/* =========================================================
+ * 1) Описание инструмента (tool) — имя используется в tool_choice
  * ========================================================= */
 export const FLASHCARD_TOOL = {
   name: "FLASHCARD_TOOL",
@@ -63,6 +111,17 @@ export const FLASHCARD_TOOL = {
 /* =========================================================
  * 2) Построение промпта
  * ========================================================= */
+
+/** Жёсткие правила для перевода в contexts[].russian */
+const TRANSLATION_RULES = `
+ВАЖНО ДЛЯ ПЕРЕВОДА:
+- В contexts[].russian ВСЕГДА возвращай ПОЛНЫЙ перевод всего предложения (чанка), а не кусок.
+- Сначала склей переносы строк в одно предложение (\\n → пробел), затем переводи.
+- Сохраняй завершающую пунктуацию (., !, ?), если она была в исходном тексте.
+- contexts[].latvian = исходное предложение после склейки переносов и trim.
+- Если из одного предложения создаются несколько карточек, contexts[].russian у них ДОЛЖЕН быть идентичным (одинаковая строка полного перевода).
+`.trim();
+
 function buildPromptForChunk(params: {
   chunkText: string;
   chunkIndex: number;
@@ -71,28 +130,38 @@ function buildPromptForChunk(params: {
   nextText?: string;
   enablePhraseExtraction?: boolean;
 }) {
-  const { chunkText, chunkIndex, totalChunks, prevText, nextText, enablePhraseExtraction } = params;
+  const {
+    chunkText,
+    chunkIndex,
+    totalChunks,
+    prevText,
+    nextText,
+    enablePhraseExtraction = true,
+  } = params;
 
   const exampleWord = `{"unit":"word","base_form":"māja","base_translation":"дом","contexts":[{"latvian":"Es esmu mājā.","russian":"Я в доме.","forms":[{"form":"mājā","translation":"в доме"}]}]}`;
   const examplePhrase = `{"unit":"phrase","base_form":"dzimšanas diena","base_translation":"день рождения","contexts":[{"latvian":"Mēs svinam dzimšanas dienu.","russian":"Мы празднуем день рождения.","forms":[{"form":"dzimšanas dienu","translation":"день рождения (вин.)"}]}]}`;
 
-  const contextSection =
-    prevText || nextText
-      ? `\nДополнительный контекст:\n- Предыдущий фрагмент: ${prevText ?? "(нет)"}\n- Следующий фрагмент: ${nextText ?? "(нет)"}\n`
-      : "";
+  const normChunk = normalizeForPrompt(chunkText);
+  const normPrev = normalizeForPrompt(prevText);
+  const normNext = normalizeForPrompt(nextText);
+
+  const contextSection = `\nДополнительный контекст:\n- Предыдущий фрагмент: ${normPrev}\n- Следующий фрагмент: ${normNext}\n`;
 
   return [
     `Ты — помощник по лингвистике латышского языка.`,
     `Задача: извлечь из текста ${enablePhraseExtraction ? "ВСЕ слова и релевантные фразы" : "ВСЕ индивидуальные слова"} и вернуть карточки через инструмент ${FLASHCARD_TOOL.name} (ровно один вызов).`,
-    `Текст чанка [${chunkIndex + 1}/${totalChunks}]:\n${chunkText}`,
+    `Текст чанка [${chunkIndex + 1}/${totalChunks}]:`,
+    normChunk,
     contextSection,
-    `Требования к структуре:
+    TRANSLATION_RULES,
+    `\nТребования к структуре:
 - unit: "word" | "phrase"
 - base_form: лемма/каноническая фраза
 - base_translation: общий перевод (fallback)
 - contexts[]: элементы с полями:
-  - latvian: исходное предложение (lv)
-  - russian: перевод (ru)
+  - latvian: исходное предложение (lv) после склейки переносов
+  - russian: ПОЛНЫЙ перевод этого предложения (ru)
   - forms[]: { form, translation } для встреченных форм`,
     `Примеры:
 WORD:
@@ -149,43 +218,10 @@ export function buildFlashcardPrompt(
 }
 
 /* =========================================================
- * 3) Утилиты парсинга
+ * 3) Парсинг assistant message → Card[]
  * ========================================================= */
-const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
-const clean = (s: unknown) => (s == null ? "" : String(s).trim());
 
-function stripFences(s: string) {
-  return s
-    .replace(/```json\s*/gi, "")
-    .replace(/```\s*$/gi, "")
-    .trim();
-}
-
-function safeJSONParse<T = any>(s: string): T | null {
-  try {
-    return JSON.parse(s) as T;
-  } catch {
-    return null;
-  }
-}
-
-/** Текстовая обёртка вида FLASHCARD_TOOL({...}) → объект */
-function parseToolEnvelope(text: string): any | null {
-  const tag = `${FLASHCARD_TOOL.name}(`;
-  const idx = text.indexOf(tag);
-  if (idx === -1) return null;
-  const start = text.indexOf("(", idx);
-  const end = text.lastIndexOf(")");
-  if (start === -1 || end === -1 || end <= start) return null;
-  const inside = text.slice(start + 1, end).trim();
-  return safeJSONParse(stripFences(inside));
-}
-
-function ensureVisible(cards: Card[]): Card[] {
-  return cards.map(c => ({ ...c, visible: c.visible !== false }));
-}
-
-/** Конвертация старого массива в новый Card[] */
+/** Конвертация старого массива в новый Card[] (fallback) */
 function oldArrayToNew(oldArr: any[]): Card[] {
   if (!Array.isArray(oldArr)) return [];
   const result: Card[] = [];
@@ -223,12 +259,35 @@ function oldArrayToNew(oldArr: any[]): Card[] {
   return result;
 }
 
-/** Парсим assistant message → Card[] (tool_use > текстовая обёртка > старый JSON) */
+/** Нормализация контекстов, лёгкая защита от пустых/обрезанных полей */
+function normalizeContexts(arr: any[]): Context[] {
+  if (!Array.isArray(arr)) return [];
+  const out: Context[] = [];
+  for (const raw of arr) {
+    const latvian = normalizeForPrompt(clean(raw?.latvian));
+    const russian = normalizeForPrompt(clean(raw?.russian));
+    const formsRaw = Array.isArray(raw?.forms) ? raw.forms : [];
+
+    const forms: FormEntry[] = formsRaw
+      .map((f: any) => ({
+        form: clean(f?.form),
+        translation: clean(f?.translation),
+      }))
+      .filter((f: FormEntry) => f.form && f.translation);
+
+    if (!latvian || !russian || forms.length === 0) continue;
+
+    out.push({ latvian, russian, forms });
+  }
+  return out;
+}
+
+/** Основной парсер ответа ассистента */
 function parseMessageToCards(message: any): Card[] {
   try {
     const content = Array.isArray(message?.content) ? message.content : [];
 
-    // 1) tool_use
+    // 1) Нормальный путь — tool_use
     for (const item of content) {
       if (item?.type === "tool_use" && item?.name === FLASHCARD_TOOL.name) {
         const input = item.input ?? {};
@@ -240,26 +299,7 @@ function parseMessageToCards(message: any): Card[] {
           unit: c?.unit === "phrase" ? "phrase" : "word",
           base_form: clean(c?.base_form),
           base_translation: clean(c?.base_translation) || undefined,
-          contexts: Array.isArray(c?.contexts)
-            ? c.contexts
-                .map(
-                  (ctx: any) =>
-                    [
-                      clean(ctx?.latvian),
-                      clean(ctx?.russian),
-                      Array.isArray(ctx?.forms)
-                        ? ctx.forms
-                            .map((f: any) => ({
-                              form: clean(f?.form),
-                              translation: clean(f?.translation),
-                            }))
-                            .filter((f: FormEntry) => f.form && f.translation)
-                        : [],
-                    ] as const
-                )
-                .filter(([lv, ru, forms]) => lv && ru && forms.length > 0)
-                .map(([latvian, russian, forms]) => ({ latvian, russian, forms }))
-            : [],
+          contexts: normalizeContexts(c?.contexts),
           visible: c?.visible !== false,
         }));
 
@@ -275,7 +315,7 @@ function parseMessageToCards(message: any): Card[] {
       }
     }
 
-    // 2) текстовые куски (включая FLASHCARD_TOOL(...))
+    // 2) Текстовые куски (включая FLASHCARD_TOOL(...))
     const textParts = content
       .filter((i: any) => i?.type === "text" && typeof i?.text === "string")
       .map((i: any) => i.text);
@@ -311,8 +351,9 @@ function parseMessageToCards(message: any): Card[] {
 }
 
 /* =========================================================
- * 4) Batch API — типы согласно официальной доке
+ * 4) Batch API — типы и функции
  * ========================================================= */
+
 export type BatchProgress = {
   processing_status: "in_progress" | "canceling" | "ended";
   request_counts: {
@@ -336,13 +377,32 @@ type BatchGetResponse = {
 type BatchRequestParams = Record<string, unknown>;
 type BatchRequestItem = { custom_id: string; params: BatchRequestParams };
 
+function buildUserMessageForChunk(
+  chunkText: string,
+  index: number,
+  total: number,
+  prev?: string,
+  next?: string
+) {
+  return {
+    role: "user",
+    content: buildPromptForChunk({
+      chunkText,
+      chunkIndex: index,
+      totalChunks: total,
+      prevText: prev,
+      nextText: next,
+      enablePhraseExtraction: true,
+    }),
+  };
+}
+
 /** Создание batch на сервере-прокси */
 export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: string }> {
   const cfg = getClaudeConfig("textProcessing");
   const requests: BatchRequestItem[] = [];
 
   for (let i = 0; i < chunks.length; i++) {
-    const chunkText = chunks[i];
     const prevText = i > 0 ? chunks[i - 1] : undefined;
     const nextText = i < chunks.length - 1 ? chunks[i + 1] : undefined;
 
@@ -354,19 +414,7 @@ export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: stri
         temperature: cfg.temperature,
         tools: [FLASHCARD_TOOL],
         tool_choice: { type: "tool", name: FLASHCARD_TOOL.name },
-        messages: [
-          {
-            role: "user",
-            content: buildPromptForChunk({
-              chunkText,
-              chunkIndex: i,
-              totalChunks: chunks.length,
-              prevText,
-              nextText,
-              enablePhraseExtraction: true,
-            }),
-          },
-        ],
+        messages: [buildUserMessageForChunk(chunks[i], i, chunks.length, prevText, nextText)],
       },
     });
   }
@@ -390,8 +438,8 @@ export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: stri
 }
 
 /**
- * Ожидаем единственный терминальный статус 'ended', терпим временные 404 (индексация),
- * транслируем прогресс через onProgress, затем забираем JSONL и парсим в Card[].
+ * Ожидаем терминальный статус 'ended', транслируем прогресс,
+ * затем забираем JSONL и парсим в Card[].
  */
 export async function fetchBatchResults(
   batchId: string,
@@ -442,8 +490,7 @@ export async function fetchBatchResults(
       const p = statusJson.processing_status; // 'in_progress' | 'canceling' | 'ended'
       console.log(`🛰️ Batch ${batchId} status: ${p}`);
 
-      if (p === "ended") break; // единственный терминальный статус
-      // иначе: 'in_progress' или 'canceling' — ждём дальше
+      if (p === "ended") break;
     } catch (e) {
       console.warn("⚠️ batch status fetch error:", e);
     }
@@ -484,7 +531,7 @@ export async function fetchBatchResults(
     try {
       const obj = JSON.parse(line);
 
-      // Несколько возможных форм обёртки результата
+      // Возможные обёртки результата
       const message =
         obj?.result?.message ||
         obj?.message ||
@@ -567,19 +614,7 @@ export async function processChunkWithTools(
       temperature: cfg.temperature,
       tools: [FLASHCARD_TOOL],
       tool_choice: { type: "tool", name: FLASHCARD_TOOL.name },
-      messages: [
-        {
-          role: "user",
-          content: buildPromptForChunk({
-            chunkText: chunk,
-            chunkIndex: index,
-            totalChunks: total,
-            prevText,
-            nextText,
-            enablePhraseExtraction: true,
-          }),
-        },
-      ],
+      messages: [buildUserMessageForChunk(chunk, index, total, prevText, nextText)],
     }),
   });
 
@@ -597,7 +632,7 @@ export async function processChunkWithTools(
     ? data.content.find((p: any) => p?.type === "text")?.text
     : undefined;
 
-  if (typeof text === "string" && text.includes(`${FLASHCARD_TOOL.name}(`)) {
+  if (typeof text === "string" && text.includes(`${FLASHCARD_TOOL.name}`)) {
     const env = parseToolEnvelope(text);
     const list = Array.isArray(env?.flashcards) ? env.flashcards : Array.isArray(env) ? env : [];
     if (Array.isArray(list) && list.length > 0) {
@@ -608,13 +643,13 @@ export async function processChunkWithTools(
     }
   }
 
-  // 3) Старый JSON массив
+  // 3) Старый JSON массив (fallback)
   if (typeof text === "string") {
     const old = textToCards(stripFences(text));
     const converted = oldArrayToNew(old);
     if (converted.length > 0) return mergeCardsByBaseForm(ensureVisible(converted));
   }
 
-  // Пусто — вернём [], верхний слой сам решит, что делать
+  // Пусто — верхний слой сам решит, что делать
   return [];
 }
