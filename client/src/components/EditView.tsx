@@ -1,18 +1,19 @@
-import React, { useState } from "react";
+// client/src/components/EditView.tsx
+import React, { useMemo, useState, useEffect } from "react";
 import type { FlashcardNew, BaseComponentProps, Context } from "../types";
 
-// ================== ВСПОМОГАТЕЛЬНЫЕ ХЕЛПЕРЫ (совместимость старой/новой схем) ==================
+/* ===================== Helpers (new/old schema friendly) ===================== */
 function getUnit(card: any): "word" | "phrase" {
-  // 1) если сервер/стор уже явно проставил unit — используем его
+  // 1) explicit from data
   const u = String(card?.unit || "").toLowerCase();
   if (u === "word" || u === "phrase") return u as "word" | "phrase";
 
-  // 2) фолбэк: если base_form выглядит как словосочетание — считаем фразой
+  // 2) base_form looks like a phrase
   const bf = (card?.base_form || "").trim();
   if (/\s/.test(bf)) return "phrase";
 
-  // 3) ещё один фолбэк: если первый LV-контекст содержит пробел — тоже фраза
-  const lv = String(card?.contexts?.[0]?.latvian || "");
+  // 3) first LV context looks like a phrase
+  const lv = String(card?.contexts?.[0]?.latvian || card?.contexts?.[0]?.original_phrase || "");
   if (/\s/.test(lv.trim())) return "phrase";
 
   return "word";
@@ -31,17 +32,25 @@ function getPreviewContext(card: any): { lv: string; ru: string } | null {
   return { lv, ru };
 }
 
-// ================== Пропсы компонента ==================
-interface EditViewProps extends BaseComponentProps {
-  flashcards: FlashcardNew[]; // массив карточек для редактирования
-  onCardUpdate: (index: number, field: string, value: string | boolean | Context[]) => void; // функция обновления карточки
-  onToggleVisibility?: (index: number) => void; // ✅ optional if not required internally
-  onDeleteCard: (index: number) => void; // функция удаления карточки
-  onAddCard: () => void; // функция добавления новой карточки
-  onClearAll: () => void; // очистка всех карточек
+function stableKeyOf(card: any, fallback: string) {
+  const bf = (card?.base_form || "").toString();
+  const bt = (card?.base_translation || "").toString();
+  const u = getUnit(card);
+  // Prefer an id if present, otherwise a composite key
+  return (card?.id as string) || `${u}::${bf}::${bt}` || fallback;
 }
 
-// ================== Компонент редактирования флеш-карт ==================
+/* ===================== Props ===================== */
+interface EditViewProps extends BaseComponentProps {
+  flashcards: FlashcardNew[];
+  onCardUpdate: (index: number, field: string, value: string | boolean | Context[]) => void;
+  onToggleVisibility?: (index: number) => void;
+  onDeleteCard: (index: number) => void;
+  onAddCard: () => void;
+  onClearAll: () => void;
+}
+
+/* ===================== Component ===================== */
 export const EditView: React.FC<EditViewProps> = ({
   flashcards,
   onCardUpdate,
@@ -52,21 +61,18 @@ export const EditView: React.FC<EditViewProps> = ({
   className = "",
   "data-testid": testId,
 }) => {
-  // Локальное состояние для поиска и пагинации
+  // Local UI state
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
-
-  // 📌 Сброс текущей страницы при изменении поискового запроса
-  React.useEffect(() => {
-    setCurrentPage(0);
-  }, [searchTerm]);
-
   const cardsPerPage = 20;
 
-  // Фильтрация карточек по поисковому запросу (учитываем base_form/base_translation/unit)
-  const filteredCards = React.useMemo(() => {
-    if (!searchTerm.trim()) return flashcards;
-    const q = searchTerm.toLowerCase();
+  // Reset page when search changes
+  useEffect(() => setCurrentPage(0), [searchTerm]);
+
+  // Filter by base_form / base_translation / unit
+  const filteredCards = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return flashcards;
     return flashcards.filter(card => {
       const bf = (card.base_form || "").toLowerCase();
       const bt = (card.base_translation || "").toLowerCase();
@@ -75,38 +81,54 @@ export const EditView: React.FC<EditViewProps> = ({
     });
   }, [flashcards, searchTerm]);
 
-  // Подсчет карточек для отображения
-  const visibleCards = filteredCards.filter(card => card.visible !== false);
+  // Map filteredCards -> indices in the source array (stable addressing)
+  const indexMap = useMemo(
+    () => filteredCards.map(c => flashcards.indexOf(c)),
+    [filteredCards, flashcards]
+  );
+
   const totalPages = Math.ceil(filteredCards.length / cardsPerPage);
   const startIndex = currentPage * cardsPerPage;
   const endIndex = Math.min(startIndex + cardsPerPage, filteredCards.length);
-  const cards = filteredCards.slice(startIndex, endIndex);
 
-  // Логирование для отладки
-  React.useEffect(() => {
-    console.log(
-      `📊 EditView: Обновлено карточек: ${filteredCards.length} | видимых: ${visibleCards.length}`
+  // Page slices
+  const pageCards = filteredCards.slice(startIndex, endIndex);
+  const pageIndices = indexMap.slice(startIndex, endIndex);
+
+  // Fallback resolver if referential equality is lost
+  const getRealIndex = (card: any, fallback: number) => {
+    const idx = flashcards.indexOf(card);
+    if (idx !== -1) return idx;
+    const bf = card?.base_form;
+    const bt = card?.base_translation;
+    const u = getUnit(card);
+    const byFields = flashcards.findIndex(
+      c => c.base_form === bf && c.base_translation === bt && getUnit(c) === u
     );
-  }, [filteredCards.length, visibleCards.length]);
-
-  // Обработчик изменения страницы
-  const handlePageChange = (page: number) => {
-    setCurrentPage(Math.max(0, Math.min(page, totalPages - 1)));
+    return byFields !== -1 ? byFields : fallback;
   };
 
-  // Универсальный обработчик изменения текстовых полей
+  // Logging
+  useEffect(() => {
+    const visible = filteredCards.filter(c => c.visible !== false).length;
+    console.log(`📊 EditView: filtered=${filteredCards.length} | visible=${visible}`);
+  }, [filteredCards]);
+
+  // Handlers
+  const handlePageChange = (page: number) =>
+    setCurrentPage(Math.max(0, Math.min(page, totalPages - 1)));
+
   const handleTextChange =
     (index: number, field: "base_form" | "base_translation") =>
     (e: React.ChangeEvent<HTMLInputElement>) => {
       onCardUpdate(index, field, e.target.value);
     };
 
-  // Обработчик смены unit
   const handleUnitChange = (index: number) => (e: React.ChangeEvent<HTMLSelectElement>) => {
-    onCardUpdate(index, "unit", e.target.value);
+    const val = e.target.value === "phrase" ? "phrase" : "word";
+    onCardUpdate(index, "unit", val);
   };
 
-  // Обработчик переключения видимости (используем onToggleVisibility если передан)
   const handleVisibilityToggle = (index: number, currentVisible: boolean) => {
     if (typeof onToggleVisibility === "function") {
       onToggleVisibility(index);
@@ -117,7 +139,7 @@ export const EditView: React.FC<EditViewProps> = ({
 
   return (
     <div className={`w-full max-w-7xl mx-auto p-8 ${className}`} data-testid={testId}>
-      {/* Заголовок и действия */}
+      {/* Header */}
       <div className="bg-white rounded-3xl p-6 shadow-lg mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <h2
@@ -147,7 +169,7 @@ export const EditView: React.FC<EditViewProps> = ({
           </div>
         </div>
 
-        {/* Поиск */}
+        {/* Search */}
         <input
           type="text"
           placeholder="Search cards by base form, translation or unit..."
@@ -159,7 +181,7 @@ export const EditView: React.FC<EditViewProps> = ({
         />
       </div>
 
-      {/* Таблица карточек */}
+      {/* Table */}
       <div className="bg-white rounded-3xl shadow-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -185,23 +207,25 @@ export const EditView: React.FC<EditViewProps> = ({
                 </th>
               </tr>
             </thead>
+
             <tbody className="divide-y divide-gray-200">
-              {cards.map((card, idx) => {
-                const realIndex = startIndex + idx;
+              {pageCards.map((card, idx) => {
+                const fallbackIdx = pageIndices[idx];
+                const realIndex = getRealIndex(card, fallbackIdx);
+                const unit = getUnit(card);
+                const isVisible = card.visible !== false;
                 const needsReprocessing =
                   (card as { needsReprocessing?: boolean }).needsReprocessing === true;
                 const preview = getPreviewContext(card);
                 const contextCount = getContextCount(card);
-                const unit = getUnit(card);
-                const isVisible = card.visible !== false;
 
                 return (
                   <tr
-                    key={realIndex}
+                    key={stableKeyOf(card, String(realIndex))}
                     className={`${!isVisible ? "opacity-50 bg-gray-100" : ""}`}
                     data-testid={`card-row-${realIndex}`}
                   >
-                    {/* VISIBLE checkbox */}
+                    {/* VISIBLE */}
                     <td className="px-3 py-4 align-top">
                       <div className="flex items-center gap-2">
                         <input
@@ -221,7 +245,7 @@ export const EditView: React.FC<EditViewProps> = ({
                       </div>
                     </td>
 
-                    {/* BASE FORM + превью фразы */}
+                    {/* BASE FORM */}
                     <td className="px-3 py-4 align-top">
                       <input
                         type="text"
@@ -240,7 +264,7 @@ export const EditView: React.FC<EditViewProps> = ({
                       )}
                     </td>
 
-                    {/* BASE TRANSLATION + превью перевода */}
+                    {/* BASE TRANSLATION */}
                     <td className="px-3 py-4 align-top">
                       <input
                         type="text"
@@ -273,7 +297,7 @@ export const EditView: React.FC<EditViewProps> = ({
                       </select>
                     </td>
 
-                    {/* CONTEXTS count */}
+                    {/* CONTEXTS */}
                     <td className="px-3 py-4 align-top">
                       <span className="inline-flex items-center gap-2 text-sm">
                         <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
@@ -301,7 +325,7 @@ export const EditView: React.FC<EditViewProps> = ({
           </table>
         </div>
 
-        {/* Пагинация */}
+        {/* Pagination */}
         {totalPages > 1 && (
           <div className="px-6 py-4 bg-gray-50 border-t">
             <div className="flex justify-between items-center">
@@ -349,7 +373,7 @@ export const EditView: React.FC<EditViewProps> = ({
         )}
       </div>
 
-      {/* Информация */}
+      {/* Footer */}
       <div className="mt-6 text-center">
         <p
           className="text-white/80 text-sm"
@@ -362,5 +386,4 @@ export const EditView: React.FC<EditViewProps> = ({
   );
 };
 
-// Экспорт по умолчанию для удобства
 export default EditView;
