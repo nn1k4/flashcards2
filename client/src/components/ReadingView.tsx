@@ -1,9 +1,13 @@
 import React from "react";
 import type { FlashcardNew, TooltipState, BaseComponentProps } from "../types";
-import { findPhraseAtPosition, getContainingSentence } from "../utils/textUtils";
+import {
+  findPhraseAtPosition,
+  getContainingSentence,
+  cleanTextForMatching,
+} from "../utils/textUtils";
 import { findTranslationForText } from "../utils/cardUtils";
 
-// ================== ВСПОМОГАТЕЛЬНЫЕ ХЕЛПЕРЫ ==================
+/* ================== ВСПОМОГАТЕЛЬНЫЕ ХЕЛПЕРЫ ================== */
 const cleanToken = (s: string): string =>
   (s || "")
     .toLowerCase()
@@ -11,10 +15,9 @@ const cleanToken = (s: string): string =>
     .replace(/[.,!?;:()\[\]"'`«»]/g, "");
 
 /**
- * Пытается найти перевод конкретной формы/фразы в карточке
+ * Ищет перевод конкретной формы/фразы в карточке.
  * 1) Новая схема: contexts[].forms[{ form, translation }]
  * 2) Старая схема: context.text_forms[] + context.word_form_translations[] (по индексу)
- * Возвращает { translation, source } или null
  */
 function lookupFormTranslationFromCard(
   card: any,
@@ -24,7 +27,7 @@ function lookupFormTranslationFromCard(
   const needle = cleanToken(rawText);
 
   for (const ctx of card.contexts) {
-    // Новая схема
+    // Новая схема (приоритет)
     if (Array.isArray(ctx?.forms) && ctx.forms.length > 0) {
       for (const f of ctx.forms) {
         const form = cleanToken(f?.form || "");
@@ -39,7 +42,6 @@ function lookupFormTranslationFromCard(
     if (Array.isArray(ctx?.text_forms) && ctx.text_forms.length > 0) {
       const index = ctx.text_forms.findIndex((t: string) => cleanToken(t) === needle);
       if (index >= 0) {
-        // Берем перевод из word_form_translations по индексу
         const tr =
           (Array.isArray(ctx.word_form_translations) &&
             (ctx.word_form_translations[index] || ctx.word_form_translations[0])) ||
@@ -53,14 +55,14 @@ function lookupFormTranslationFromCard(
   return null;
 }
 
-// Интерфейс пропсов для ReadingView компонента
+/* ================== Пропсы компонента ================== */
 interface ReadingViewProps extends BaseComponentProps {
-  inputText: string; // исходный латышский текст
-  formTranslations: Map<string, string>; // Map переводов форм слов
-  flashcards: FlashcardNew[]; // массив карточек с контекстами
+  inputText: string;
+  formTranslations: Map<string, string>;
+  flashcards: FlashcardNew[];
 }
 
-// Компонент интерактивного чтения с контекстными подсказками
+/* ================== Компонент интерактивного чтения ================== */
 export const ReadingView: React.FC<ReadingViewProps> = ({
   inputText,
   formTranslations,
@@ -68,7 +70,6 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
   className = "",
   "data-testid": testId,
 }) => {
-  // Состояние tooltip
   const [tooltip, setTooltip] = React.useState<TooltipState>({
     show: false,
     text: "",
@@ -78,27 +79,15 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
     isPhrase: false,
   });
 
-  // Функция скрытия tooltip с очисткой стилей DOM
   const hideTooltip = React.useCallback((event?: React.MouseEvent) => {
-    // Очищаем стили DOM элемента, если event передан
     if (event?.currentTarget) {
       const element = event.currentTarget as HTMLElement;
-      if (element.style) {
-        element.style.backgroundColor = ""; // Убираем жёлтый фон
-      }
+      if (element.style) element.style.backgroundColor = "";
     }
-
-    setTooltip({
-      show: false,
-      text: "",
-      context: "",
-      x: 0,
-      y: 0,
-      isPhrase: false,
-    });
+    setTooltip({ show: false, text: "", context: "", x: 0, y: 0, isPhrase: false });
   }, []);
 
-  // Функция обработки hover на слово/фразу
+  /** Главная функция показа тултипа */
   const handleWordHover = React.useCallback(
     (
       card: FlashcardNew,
@@ -109,69 +98,63 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
     ) => {
       if (!card || !event?.currentTarget) return;
 
-      console.log(`🎯 handleWordHover called:`, {
-        text,
-        isPhrase,
-        currentSentence: currentSentence ? currentSentence.substring(0, 50) + "..." : "none",
-        cardBaseForm: card.base_form,
-        hasWordFormTranslation: !!(card as any).word_form_translation,
-      });
-
       try {
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
         const containerRect = event.currentTarget.closest(".bg-white")?.getBoundingClientRect();
-
         if (!containerRect) return;
 
         let translationText = "";
         let contextInfo = "";
 
-        // ===== ПРИОРИТЕТ 1: Точная форма/фраза из контекстов карточки (новая/старая схема) =====
+        // ===== ПРИОРИТЕТ 1: точная форма/фраза из contexts (новая/старая схема) =====
         const fromCard = lookupFormTranslationFromCard(card as any, text);
         if (fromCard?.translation) {
           translationText = fromCard.translation;
           contextInfo = isPhrase
             ? `Phrase (contexts): ${card.base_form || text}`
             : `Form (contexts): ${card.base_form} → ${text}`;
-          console.log(`✅ Using ${fromCard.source}: "${text}" → "${translationText}"`);
         }
 
-        // ===== ПРИОРИТЕТ 2: word_form_translation из карточки (историческое поле) =====
+        // ===== ПРИОРИТЕТ 2: если это ФРАЗА — берем base_translation карточки фразы =====
+        // (Это исправляет кейс «iebiezināts piens»: показываем «сгущенное молоко», а не склейку отдельных слов)
+        if (!translationText && isPhrase && card.base_translation) {
+          translationText = card.base_translation;
+          contextInfo = `Phrase: ${card.base_form}`;
+        }
+
+        // ===== ПРИОРИТЕТ 3: историческое поле word_form_translation =====
         if (!translationText && (card as any).word_form_translation) {
           translationText = (card as any).word_form_translation!;
           contextInfo = isPhrase
             ? `Phrase: ${card.base_form || text}`
             : `Form: ${card.base_form} → ${text}`;
-          console.log(`✅ Using word_form_translation: "${text}" → "${translationText}"`);
         }
 
-        // ===== ПРИОРИТЕТ 3: Поиск в formTranslations (глобальная Map) =====
+        // ===== ПРИОРИТЕТ 4: Map форм (formTranslations) =====
         if (!translationText && formTranslations && formTranslations.size > 0) {
-          const cleanText = cleanToken(text);
+          const cleanText = cleanTextForMatching(text);
 
           if (isPhrase) {
-            console.log(`🔍 Searching phrase in formTranslations: "${cleanText}"`);
-            // Точное совпадение
+            // точное совпадение по ключу фразы
             translationText = formTranslations.get(cleanText) || "";
 
-            // Варианты с разделителями
+            // варианты с разделителями
             if (!translationText) {
               const variants = [
                 cleanText.replace(/ /g, "_"),
                 cleanText.replace(/ /g, ""),
                 cleanText.replace(/ /g, "-"),
               ];
-              for (const variant of variants) {
-                const found = formTranslations.get(variant);
+              for (const v of variants) {
+                const found = formTranslations.get(v);
                 if (found) {
                   translationText = found;
-                  console.log(`✅ Found phrase variant: "${variant}" → "${found}"`);
                   break;
                 }
               }
             }
 
-            // Собрать из слов, если не нашли
+            // ⚠️ ЕСЛИ фразовый перевод так и не найден — только тогда пробуем «склейку слов»
             if (!translationText && cleanText.includes(" ")) {
               const words = cleanText.split(" ").filter(Boolean);
               const translations = words
@@ -179,7 +162,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                 .filter(Boolean) as string[];
 
               if (translations.length > 0) {
-                // Спец-кейс: "dzimšanas dienas" → "дня рождения"
+                // Спец-правило под «dzimšanas dienas»
                 if (
                   words.includes("dzimšanas") &&
                   (words.includes("diena") || words.includes("dienas"))
@@ -188,7 +171,6 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                 } else {
                   translationText = translations.join(" ");
                 }
-                console.log(`🔧 Built phrase from words: "${translationText}"`);
               }
             }
 
@@ -196,16 +178,14 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
               contextInfo = `Phrase: ${card.base_form || text}`;
             }
           } else {
-            // Для слов
-            console.log(`🔍 Searching word in formTranslations: "${cleanText}"`);
+            // слово
             const formTranslation = formTranslations.get(cleanText);
             if (formTranslation) {
               translationText = formTranslation;
               contextInfo = `Form: ${card.base_form} → ${text}`;
-              console.log(`✅ Found in formTranslations: "${cleanText}" → "${formTranslation}"`);
             }
 
-            // Двухсловные комбинации в рамках предложения
+            // Проба двухсловной мини-фразы в пределах предложения
             if (!translationText && currentSentence) {
               const sentenceWords = currentSentence
                 .split(/\s+/)
@@ -220,45 +200,38 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
                 if (phraseTranslation) {
                   translationText = phraseTranslation;
                   contextInfo = `Phrase: ${phrase}`;
-                  console.log(`✅ Found two-word phrase: "${phrase}" → "${phraseTranslation}"`);
                 }
               }
             }
           }
         }
 
-        // ===== ПРИОРИТЕТ 4: Контекстная подсказка из карточек (findTranslationForText) =====
+        // ===== ПРИОРИТЕТ 5: контекстное предложение из карточек =====
         if (!translationText && currentSentence) {
           const viaCard = findTranslationForText(text.trim(), flashcards, currentSentence);
           if (viaCard?.contextTranslation) {
             translationText = viaCard.contextTranslation;
-            contextInfo = isPhrase
-              ? "Sentence translation (context)"
-              : "Sentence translation (context)";
-            console.log(`🧠 Using context sentence translation: "${translationText}"`);
+            contextInfo = "Sentence translation (context)";
           }
         }
 
-        // ===== ПРИОРИТЕТ 5: card.back (историческое поле), затем base_translation =====
+        // ===== ПРИОРИТЕТ 6: card.back → base_translation =====
         if (!translationText && (card as any).back) {
           translationText = (card as any).back!;
           contextInfo = `Card back: ${card.base_form}`;
-          console.log(`📝 Using card.back: "${text}" → "${translationText}"`);
         }
         if (!translationText && card.base_translation) {
           translationText = card.base_translation;
           contextInfo = `Base: ${card.base_form}`;
-          console.log(`⚠️ Using base_translation: "${text}" → "${translationText}"`);
         }
 
         // ===== FALLBACK =====
         if (!translationText) {
           translationText = "Translation not found";
           contextInfo = "No translation available";
-          console.log(`❌ No translation found for: "${text}"`);
         }
 
-        // Позиционирование tooltip
+        // Позиционирование тултипа
         const tooltipX = rect.left - containerRect.left + rect.width / 2;
         const tooltipY = rect.top - containerRect.top - 60;
 
@@ -268,32 +241,28 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
           context: contextInfo,
           x: tooltipX,
           y: tooltipY,
-          isPhrase: isPhrase,
+          isPhrase,
         });
 
-        // Визуальная обратная связь
+        // Подсветка ховер-элемента
         const element = event.currentTarget as HTMLElement;
-        if (element.style) {
-          element.style.backgroundColor = "#fef3c7"; // Желтый фон
-        }
+        if (element.style) element.style.backgroundColor = isPhrase ? "#dbeafe" : "#fef3c7";
       } catch (error) {
         console.error("❌ Tooltip error:", error);
-
-        // Fallback при ошибке
         setTooltip({
           show: true,
           text: (card.base_translation || (card as any).back || "Error") as string,
           context: "Error occurred",
           x: 0,
           y: 0,
-          isPhrase: isPhrase,
+          isPhrase,
         });
       }
     },
     [formTranslations, flashcards]
   );
 
-  // Проверяем наличие текста
+  // Диагностика
   console.log("📖 [ReadingView] inputText length:", inputText?.length);
   console.log("📖 [ReadingView] flashcards:", flashcards.length);
 
@@ -305,49 +274,42 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
     );
   }
 
-  // Разбиваем текст на слова с сохранением пробелов
+  // Разбивка текста на «слова» и «пробелы» (для позиционной логики)
   const words = inputText.split(/(\s+)/);
   const renderedElements: React.ReactNode[] = [];
   let i = 0;
 
-  // Обрабатываем каждое слово
   while (i < words.length) {
-    const word = words[i];
+    const token = words[i];
 
-    // Пропускаем пробелы
-    if (/^\s+$/.test(word)) {
-      renderedElements.push(<span key={i}>{word}</span>);
+    // Пробелы — выводим как есть
+    if (/^\s+$/.test(token)) {
+      renderedElements.push(<span key={i}>{token}</span>);
       i++;
       continue;
     }
 
-    // Пропускаем чистую пунктуацию
-    if (!word.trim() || /^[.,!?;:]+$/.test(word.trim())) {
-      renderedElements.push(<span key={i}>{word}</span>);
+    // Пунктуация отдельно, без подсказок
+    if (!token.trim() || /^[.,!?;:]+$/.test(token.trim())) {
+      renderedElements.push(<span key={i}>{token}</span>);
       i++;
       continue;
     }
 
-    // Сначала пробуем найти фразу
+    // 1) Пытаемся найти фразу
     const phraseMatch = findPhraseAtPosition(words, i, flashcards);
-
     if (phraseMatch) {
-      // Найдена фраза - собираем элементы
-      const phraseElements: string[] = [];
-      let phraseWordsCollected = 0;
+      const phraseParts: string[] = [];
+      let collected = 0;
       let j = i;
 
-      while (j < words.length && phraseWordsCollected < phraseMatch.length) {
-        if (/^\s+$/.test(words[j])) {
-          phraseElements.push(words[j]);
-        } else {
-          phraseElements.push(words[j]);
-          phraseWordsCollected++;
-        }
-        j++;
+      while (j < words.length && collected < phraseMatch.length) {
+        const w = words[j++];
+        phraseParts.push(w);
+        if (!/^\s+$/.test(w)) collected++;
       }
 
-      const phraseText = phraseElements.join("");
+      const phraseText = phraseParts.join("");
 
       renderedElements.push(
         <span
@@ -372,9 +334,8 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
       continue;
     }
 
-    // Проверяем индивидуальное слово
-    const wordMatch = findTranslationForText(word.trim(), flashcards);
-
+    // 2) Иначе — проверяем индивидуальное слово
+    const wordMatch = findTranslationForText(token.trim(), flashcards);
     if (wordMatch) {
       renderedElements.push(
         <span
@@ -383,7 +344,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
           onMouseEnter={e =>
             handleWordHover(
               wordMatch.card,
-              word,
+              token,
               e,
               false,
               getContainingSentence(i, words, inputText)
@@ -391,11 +352,11 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
           }
           onMouseLeave={hideTooltip}
         >
-          {word}
+          {token}
         </span>
       );
     } else {
-      renderedElements.push(<span key={i}>{word}</span>);
+      renderedElements.push(<span key={i}>{token}</span>);
     }
 
     i++;
@@ -403,7 +364,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
 
   return (
     <div className={`w-full max-w-4xl mx-auto p-8 ${className}`} data-testid={testId}>
-      {/* Легенда с объяснением цветов */}
+      {/* Легенда */}
       <div
         className="rounded-2xl p-4 shadow-lg mb-4"
         style={{ backgroundColor: "rgba(106, 155, 204, 0.3)" }}
@@ -427,7 +388,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
         </div>
       </div>
 
-      {/* Основной текст с интерактивными элементами */}
+      {/* Текст и тултип */}
       <div className="bg-white rounded-3xl p-8 shadow-lg relative">
         <div
           className="text-gray-900 leading-relaxed"
@@ -441,7 +402,6 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
           {renderedElements}
         </div>
 
-        {/* Tooltip */}
         {tooltip.show && (
           <div
             className={`absolute z-50 px-3 py-2 rounded-lg shadow-lg pointer-events-none max-w-xs ${
@@ -465,5 +425,4 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
   );
 };
 
-// Экспорт по умолчанию для удобства
 export default ReadingView;
