@@ -15,6 +15,8 @@ export interface Context {
   latvian: string; // исходная фраза/предложение (lv)
   russian: string; // перевод фразы/предложения (ru)
   forms: FormEntry[]; // реально встретившиеся формы (1..N)
+  /** Anchor: index of the source sentence in the whole text (0-based) */
+  sid?: number;
 }
 
 // Унифицированная карточка

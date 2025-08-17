@@ -4,13 +4,13 @@ import type { Card, Context, FormEntry } from "./types";
 import { textToCards, mergeCardsByBaseForm } from "./utils/cardUtils";
 
 /* =========================================================
- * 0) Небольшие утилиты (нормализация/парсинг)
+ * 0) Утилиты (нормализация/парсинг)
  * ========================================================= */
 
 const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 const clean = (s: unknown) => (s == null ? "" : String(s).trim());
 
-/** Склейка переносов в пробелы + trim (для промпта и дальнейшей валидации) */
+/** Склейка переносов в пробелы + trim (для промпта и валидации) */
 function normalizeForPrompt(s?: string) {
   if (!s) return "(нет)";
   return s
@@ -19,7 +19,7 @@ function normalizeForPrompt(s?: string) {
     .trim();
 }
 
-/** Снятие ```fences``` (+ язык) и хвостов */
+/** Снятие ```fences``` (+ указание языка) и хвостов */
 function stripFences(s: string) {
   return s
     .replace(/^```[a-zA-Z0-9_-]*\s*/g, "")
@@ -50,7 +50,7 @@ function ensureVisible(cards: Card[]): Card[] {
   return cards.map(c => ({ ...c, visible: c.visible !== false }));
 }
 
-/** Нормализуем unit на всякий случай (если сервер ошибся) */
+/** Нормализуем unit (если сервер ошибся) */
 function sanitizeUnit(unit: any, baseForm: string): "word" | "phrase" {
   const u = String(unit || "").toLowerCase();
   if (u === "word" || u === "phrase") return u as "word" | "phrase";
@@ -63,7 +63,7 @@ function sanitizeUnit(unit: any, baseForm: string): "word" | "phrase" {
 export const FLASHCARD_TOOL = {
   name: "FLASHCARD_TOOL",
   description:
-    "Return Latvian→Russian flashcards in the new Card schema with precise sentence context and form-level translations.",
+    "Return Latvian→Russian flashcards in the new Card schema with precise sentence context, anchors (sid) and form-level translations.",
   input_schema: {
     type: "object",
     additionalProperties: false,
@@ -85,10 +85,12 @@ export const FLASHCARD_TOOL = {
               items: {
                 type: "object",
                 additionalProperties: false,
+                // sid опционален на уровне схемы (мы автопроставим на клиенте при отсутствии)
                 required: ["latvian", "russian", "forms"],
                 properties: {
                   latvian: { type: "string", minLength: 1 },
                   russian: { type: "string", minLength: 1 },
+                  sid: { type: "integer", minimum: 0 },
                   forms: {
                     type: "array",
                     minItems: 1,
@@ -115,82 +117,82 @@ export const FLASHCARD_TOOL = {
 } as const;
 
 /* =========================================================
- * 2) Построение промпта (усилены правила леммы и перевода)
+ * 2) Построение промпта (лемма/перевод/якорь sid)
  * ========================================================= */
 
-/** Жёсткие правила для ПОЛНОГО перевода предложения в contexts[].russian */
+/** Жёсткие правила ПОЛНОГО перевода предложения в contexts[].russian */
 const TRANSLATION_RULES = `
 ПЕРЕВОД ПРЕДЛОЖЕНИЙ (contexts[].russian):
-- ВСЕГДА возвращай ПОЛНЫЙ перевод ВСЕГО предложения (чанка), а не кусок.
+- ВСЕГДА возвращай ПОЛНЫЙ перевод ВСЕГО предложения (чанка), а не фрагмент.
 - Сначала склей переносы строк в одно предложение (\\n → пробел), затем переводи.
-- Сохраняй завершающую пунктуацию (., !, ?) если она была.
-- contexts[].latvian = исходное предложение ПОСЛЕ склейки переносов и trim.
-- Если из одного предложения создаются несколько карточек, contexts[].russian у них ДОЛЖЕН быть идентичным (одна и та же строка полного перевода).
+- Сохраняй завершающую пунктуацию (., !, ?), если она была.
+- contexts[].latvian = исходное предложение после склейки переносов и trim.
+- Если из одного предложения создаются несколько карточек, contexts[].russian у них ДОЛЖЕН быть идентичным (одна строка полного перевода).
 `.trim();
 
 /** Жёсткие правила лемматизации и словарного перевода базовой формы */
-
 const LEMMA_RULES = `
 ЛЕММАТИЗАЦИЯ И ПЕРЕВОД ЛЕММЫ (СТРОГО):
-- base_form — ТОЛЬКО словарная форма (лемма), не встретившаяся форма.
+- base_form — ТОЛЬКО словарная форма (лемма), а не встретившаяся форма.
   • Глаголы → инфинитив на -t/-ties: pamosties, gribēt, pārsteigt.
   • Существительные → именительный ед. ч.: mamma, pankūka, diena.
-  • Прилагательные/причастия → муж. род, им. ед.: garš, lēns.
+  • Прилаг./прич. → муж. род, им. ед.: garš, lēns.
   • Наречия/предлоги/частицы → как в словаре.
-  • Сохраняй диакритики латышского (ā, ē, ī, ū, ķ, ļ, ņ, ģ, š, ž).
+  • Сохраняй диакритики (ā, ē, ī, ū, ķ, ļ, ņ, ģ, š, ž).
 
-- base_translation — общий перевод ЛЕММЫ на русский:
-  • Для глаголов — инфинитив: «просыпаться», «хотеть».
-  • Для существительных — Nom Sg: «мама», «блин», «день».
+- base_translation — общий рус. перевод ЛЕММЫ:
+  • Глаголы — инфинитив: «просыпаться», «хотеть».
+  • Сущ. — Nom Sg: «мама», «блин», «день».
   • НЕЛЬЗЯ ставить перевод конкретной формы (напр. «просыпается», «маму») в base_translation.
 
-- Встречённые формы идут ТОЛЬКО в contexts[].forms[] с переводом формы в контексте:
+- Встречённые формы идут ТОЛЬКО в contexts[].forms[] с контекстным переводом:
   forms: [{ "form": "<встретившаяся форма>", "translation": "<перевод формы в контексте>" }].
-  Пример: «mammu» — это форма леммы «mamma»; form="mammu", translation="маму".
 
 - Никогда не смешивай разные леммы:
-  • pamosties (просыпаться) ≠ pamodināt (будить/разбудить) — это РАЗНЫЕ карточки.
-  • Если в предложении встречается другая лемма — создай для неё отдельную карточку.
-  • Формы одной и той же леммы (склонения/спряжения/сравнительные степени) остаются в одной карточке.
+  • pamosties (просыпаться) ≠ pamodināt (разбудить) — это РАЗНЫЕ карточки.
 
 - Для фраз (unit="phrase"):
-  • base_form — канонический вид фразы (леммы внутри, если применимо): «dzimšanas diena», «pankūku cepšana».
+  • base_form — канонический вид фразы (леммы внутри, если применимо).
   • base_translation — общий перевод фразы.
-  • Все словоформы фразы (склонения/согласования) — в contexts[].forms[].
-
-- Если не уверен — лучше разделить карточки, чем объединить несовместимые леммы.
+  • Словоформы фразы — в contexts[].forms[].
 `.trim();
 
-/** Примеры «плохо/хорошо» на критичных кейсах */
+/** Требование к якорям sid */
+const ANCHOR_RULES = (i: number, total: number) =>
+  `
+SID (якорь контекста):
+- В каждом contexts[] укажи "sid" — 0-базовый индекс исходного предложения.
+- Текущее предложение чанка имеет sid=${i}.
+- Если используешь соседние предложения как контекст:
+  • предыдущее → sid=${Math.max(i - 1, 0)}
+  • следующее   → sid=${Math.min(i + 1, total - 1)}
+- Не выдумывай иные sid — только эти индексы из текущего текста.
+`.trim();
+
 const GOOD_BAD = `
 ПРИМЕРЫ «ПЛОХО/ХОРОШО»:
 
-1) В тексте: "Anna pamostas agri."
+1) "Anna pamostas agri."
 ❌ ПЛОХО:
 {"unit":"word","base_form":"pamostas","base_translation":"просыпается", ...}
 ✅ ХОРОШО:
 {"unit":"word","base_form":"pamosties","base_translation":"просыпаться",
  "contexts":[{"latvian":"Anna pamostas agri.","russian":"Анна просыпается рано.",
+              "sid": 0,
               "forms":[{"form":"pamostas","translation":"просыпается (3л ед.)"}]}]}
 
-2) В тексте: "Anna grib ..."
+2) "Viņas mammai ... dzimšanas diena."
 ✅:
-{"unit":"word","base_form":"gribēt","base_translation":"хотеть",
- "contexts":[{"latvian":"Anna grib ...","russian":"Анна хочет ...",
-              "forms":[{"form":"grib","translation":"хочет (3л ед.)"}]}]}
-
-3) В тексте: "... mammu pārsteigt"
-❌ ПЛОХО:
-{"unit":"word","base_form":"mammu","base_translation":"маму", ...}
-✅ ХОРОШО:
 {"unit":"word","base_form":"mamma","base_translation":"мама",
- "contexts":[{"latvian":"Anna grib mammu pārsteigt ...","russian":"Анна хочет удивить маму ...",
-              "forms":[{"form":"mammu","translation":"маму (вин.)"}]}]}
+ "contexts":[{"latvian":"Viņas mammai ...","russian":"У её мамы ...",
+              "sid": 1,
+              "forms":[{"form":"mammai","translation":"маме (дат.)"}]}]}
 
-4) Фраза:
+3) Фраза:
 ✅:
 {"unit":"phrase","base_form":"dzimšanas dienas brokastis","base_translation":"завтрак на день рождения",
  "contexts":[{"latvian":"... ar dzimšanas dienas brokastīm.","russian":"... завтраком на день рождения.",
+              "sid": 3,
               "forms":[{"form":"dzimšanas dienas brokastīm","translation":"завтраком на день рождения (тв.)"}]}]}
 `.trim();
 
@@ -221,9 +223,12 @@ function buildPromptForChunk(params: {
 - Следующий фрагмент: ${normNext}
 `.trim();
 
-  const exampleWord = `{"unit":"word","base_form":"mamma","base_translation":"мама","contexts":[{"latvian":"Es redzu mammu.","russian":"Я вижу маму.","forms":[{"form":"mammu","translation":"маму (вин.)"}]}]}`;
-  const exampleVerb = `{"unit":"word","base_form":"pamosties","base_translation":"просыпаться","contexts":[{"latvian":"Anna pamostas agri.","russian":"Анна просыпается рано.","forms":[{"form":"pamostas","translation":"просыпается (3л ед.)"}]}]}`;
-  const examplePhrase = `{"unit":"phrase","base_form":"dzimšanas diena","base_translation":"день рождения","contexts":[{"latvian":"Mēs svinam dzimšanas dienu.","russian":"Мы празднуем день рождения.","forms":[{"form":"dzimšanas dienu","translation":"день рождения (вин.)"}]}]}`;
+  const exampleWord = `{"unit":"word","base_form":"mamma","base_translation":"мама","contexts":[{"latvian":"Es redzu mammu.","russian":"Я вижу маму.","sid": 12,"forms":[{"form":"mammu","translation":"маму (вин.)"}]}]}`;
+  const exampleVerb = `{"unit":"word","base_form":"pamosties","base_translation":"просыпаться","contexts":[{"latvian":"Anna pamostas agri.","russian":"Анна просыпается рано.","sid": ${chunkIndex},"forms":[{"form":"pamostas","translation":"просыпается (3л ед.)"}]}]}`;
+  const examplePhrase = `{"unit":"phrase","base_form":"dzimšanas diena","base_translation":"день рождения","contexts":[{"latvian":"Mēs svinam dzimšanas dienu.","russian":"Мы празднуем день рождения.","sid": ${Math.min(
+    chunkIndex + 1,
+    totalChunks - 1
+  )},"forms":[{"form":"dzimšanas dienu","translation":"день рождения (вин.)"}]}]}`;
 
   return [
     `Ты — помощник по лингвистике латышского языка.`,
@@ -232,16 +237,18 @@ function buildPromptForChunk(params: {
     contextSection,
     LEMMA_RULES,
     TRANSLATION_RULES,
+    ANCHOR_RULES(chunkIndex, totalChunks),
     GOOD_BAD,
     `Требования к структуре:
 - unit: "word" | "phrase"
 - base_form: ЛЕММА/каноническая фраза (не инфлектированная форма!)
-- base_translation: словарный перевод ЛЕММЫ (гл. — инфинитив; сущ. — именительный ед.)
+- base_translation: словарный перевод ЛЕММЫ (гл. — инфинитив; сущ. — именит. ед.)
 - contexts[]:
-  - latvian: исходное предложение ПОСЛЕ склейки переносов
+  - latvian: исходное предложение (после склейки переносов)
   - russian: ПОЛНЫЙ перевод всего предложения
+  - sid: индекс предложения (якорь)
   - forms[]: { form, translation } — встречённые формы с контекстным переводом`,
-    `Мини-примеры:
+    `Примеры:
 WORD:
 ${exampleWord}
 ${exampleVerb}
@@ -295,7 +302,7 @@ export function buildFlashcardPrompt(
  * 3) Парсинг assistant message → Card[]
  * ========================================================= */
 
-/** Fallback-конвертер «старого массива» в Card[] */
+/** Fallback-конвертер «старого массива» → Card[] */
 function oldArrayToNew(oldArr: any[]): Card[] {
   if (!Array.isArray(oldArr)) return [];
   const result: Card[] = [];
@@ -333,15 +340,17 @@ function oldArrayToNew(oldArr: any[]): Card[] {
   return result;
 }
 
-/** Нормализация contexts[] (склейка переносов, фильтр пустых) */
+/** Нормализация contexts[] (склейка переносов, фильтр пустых, прокидывание sid) */
 function normalizeContexts(arr: any[]): Context[] {
   if (!Array.isArray(arr)) return [];
   const out: Context[] = [];
   for (const raw of arr) {
-    const latvian = normalizeForPrompt(clean(raw?.latvian));
-    const russian = normalizeForPrompt(clean(raw?.russian));
-    const formsRaw = Array.isArray(raw?.forms) ? raw.forms : [];
+    const latvian = normalizeForPrompt(clean(raw?.latvian || raw?.original_phrase));
+    const russian = normalizeForPrompt(clean(raw?.russian || raw?.phrase_translation));
+    const sidRaw = raw?.sid;
+    const sid = Number.isFinite(sidRaw) ? Number(sidRaw) : undefined;
 
+    const formsRaw = Array.isArray(raw?.forms) ? raw.forms : [];
     const forms: FormEntry[] = formsRaw
       .map((f: any) => ({
         form: clean(f?.form),
@@ -350,7 +359,7 @@ function normalizeContexts(arr: any[]): Context[] {
       .filter((f: FormEntry) => f.form && f.translation);
 
     if (!latvian || !russian || forms.length === 0) continue;
-    out.push({ latvian, russian, forms });
+    out.push({ latvian, russian, forms, ...(sid !== undefined ? { sid } : {}) } as Context);
   }
   return out;
 }
@@ -400,7 +409,7 @@ function parseMessageToCards(message: any): Card[] {
     if (textParts.length > 0) {
       const joined = textParts.join("\n");
 
-      // 2a) Попробуем снять обёртку FLASHCARD_TOOL(...)
+      // 2a) FLASHCARD_TOOL(...) как текст
       const env = parseToolEnvelope(joined);
       if (env) {
         const list = Array.isArray(env?.flashcards)
@@ -464,16 +473,14 @@ function buildUserMessageForChunk(
 ) {
   return {
     role: "user",
-    content: buildFlashcardPrompt(
-      {
-        chunkText,
-        chunkIndex: index,
-        totalChunks: total,
-        prevText: prev,
-        nextText: next,
-        enablePhraseExtraction: true,
-      } as any // совместимость с перегрузкой
-    ),
+    content: buildFlashcardPrompt({
+      chunkText,
+      chunkIndex: index,
+      totalChunks: total,
+      prevText: prev,
+      nextText: next,
+      enablePhraseExtraction: true,
+    }),
   };
 }
 
@@ -518,13 +525,14 @@ export async function callClaudeBatch(chunks: string[]): Promise<{ batchId: stri
 }
 
 /**
- * Ждём 'ended', шлём прогресс наружу, затем тянем JSONL и парсим в Card[].
+ * Ждём 'ended', шлём прогресс наружу, затем тянем JSONL и парсим.
+ * Возвращаем ДВА набора: «сырые» и «объединённые».
  */
 export async function fetchBatchResults(
   batchId: string,
   options?: { pollIntervalMs?: number; maxWaitMs?: number; initialDelayMs?: number },
   onProgress?: (p: BatchProgress) => void
-): Promise<Card[]> {
+): Promise<{ rawCards: Card[]; mergedCards: Card[] }> {
   const pollIntervalMs = options?.pollIntervalMs ?? 3000;
   const maxWaitMs = options?.maxWaitMs ?? 10 * 60 * 1000;
   const initialDelayMs = options?.initialDelayMs ?? 1200;
@@ -566,7 +574,7 @@ export async function fetchBatchResults(
         request_counts: statusJson.request_counts,
       });
 
-      const p = statusJson.processing_status; // 'in_progress' | 'canceling' | 'ended'
+      const p = statusJson.processing_status;
       console.log(`🛰️ Batch ${batchId} status: ${p}`);
       if (p === "ended") break;
     } catch (e) {
@@ -603,7 +611,8 @@ export async function fetchBatchResults(
     .filter(Boolean);
   console.log(`📦 Results lines: ${lines.length}`);
 
-  const collected: Card[] = [];
+  // СЫРЫЕ карточки (ничего не теряем)
+  const rawCollected: Card[] = [];
 
   for (const line of lines) {
     try {
@@ -621,7 +630,7 @@ export async function fetchBatchResults(
       // Нормальный путь — tool_use
       const cards = parseMessageToCards(message);
       if (cards.length) {
-        collected.push(...cards);
+        rawCollected.push(...cards);
         continue;
       }
 
@@ -649,7 +658,7 @@ export async function fetchBatchResults(
               ],
             });
             if (viaTool.length) {
-              collected.push(...viaTool);
+              rawCollected.push(...viaTool);
               continue;
             }
           }
@@ -657,17 +666,19 @@ export async function fetchBatchResults(
 
         // Старый JSON
         const old = textToCards(stripFences(text));
-        collected.push(...oldArrayToNew(old));
+        rawCollected.push(...oldArrayToNew(old));
       }
     } catch (e) {
       console.error("❌ JSONL parse error:", e);
     }
   }
 
-  const withVisible = ensureVisible(collected);
-  const merged = mergeCardsByBaseForm(withVisible);
-  console.log(`🎉 Batch parsed: ${withVisible.length} → ${merged.length} unique base_form entries`);
-  return merged;
+  const rawCards = ensureVisible(rawCollected);
+  const mergedCards = mergeCardsByBaseForm(rawCards);
+  console.log(
+    `🎉 Batch parsed: ${rawCards.length} → ${mergedCards.length} unique base_form entries`
+  );
+  return { rawCards, mergedCards };
 }
 
 /* =========================================================
@@ -728,6 +739,6 @@ export async function processChunkWithTools(
     if (converted.length > 0) return mergeCardsByBaseForm(ensureVisible(converted));
   }
 
-  // Пусто — ничего не возвращаем, верхний слой решит, что делать
+  // Пусто — верхний слой решит, что делать
   return [];
 }

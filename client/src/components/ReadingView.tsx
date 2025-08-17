@@ -1,3 +1,4 @@
+// client/src/components/ReadingView.tsx
 import React from "react";
 import type { FlashcardNew, TooltipState, BaseComponentProps } from "../types";
 import {
@@ -7,27 +8,57 @@ import {
 } from "../utils/textUtils";
 import { findTranslationForText } from "../utils/cardUtils";
 
-/* ================== ВСПОМОГАТЕЛЬНЫЕ ХЕЛПЕРЫ ================== */
+/* ================== Утилиты нормализации ================== */
 const cleanToken = (s: string): string =>
   (s || "")
     .toLowerCase()
     .trim()
     .replace(/[.,!?;:()\[\]"'`«»]/g, "");
 
+const norm = (s: string) =>
+  (s ?? "")
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/[«»“”"(){}\[\]—–-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const sentenceKey = (s: string) =>
+  norm(s)
+    .toLowerCase()
+    .replace(/[.?!…:;]+$/u, "")
+    .trim();
+
+/* ================== Доставание перевода формы/фразы из карточки ================== */
 /**
- * Ищет перевод конкретной формы/фразы в карточке.
- * 1) Новая схема: contexts[].forms[{ form, translation }]
- * 2) Старая схема: context.text_forms[] + context.word_form_translations[] (по индексу)
+ * Возвращает перевод формы/фразы из карточки.
+ * Приоритет:
+ *   1) contexts[].forms[] (новая схема) — c приоритизацией того контекста,
+ *      чей LV-предложение точно совпадает с текущим предложением.
+ *   2) старые поля (text_forms / word_form_translations).
  */
 function lookupFormTranslationFromCard(
   card: any,
-  rawText: string
+  rawText: string,
+  currentSentence?: string
 ): { translation: string; source: "new.forms" | "old.context" } | null {
   if (!card || !Array.isArray(card.contexts)) return null;
   const needle = cleanToken(rawText);
+  const curKey = currentSentence ? sentenceKey(currentSentence) : "";
 
+  // --- Новая схема: contexts[].forms[] ---
+  // 2 прохода: сначала ищем только в тех contexts, где LV == текущему предложению,
+  // потом — в остальных (чтобы не «перепрыгивать» на соседние предложения).
+  const contextsOrdered: any[] = [];
+  const exact: any[] = [];
+  const rest: any[] = [];
   for (const ctx of card.contexts) {
-    // Новая схема (приоритет)
+    const lvKey = sentenceKey(String(ctx?.latvian || ""));
+    if (curKey && lvKey && lvKey === curKey) exact.push(ctx);
+    else rest.push(ctx);
+  }
+  contextsOrdered.push(...exact, ...rest);
+
+  for (const ctx of contextsOrdered) {
     if (Array.isArray(ctx?.forms) && ctx.forms.length > 0) {
       for (const f of ctx.forms) {
         const form = cleanToken(f?.form || "");
@@ -37,8 +68,10 @@ function lookupFormTranslationFromCard(
         }
       }
     }
+  }
 
-    // Старая схема
+  // --- Старая схема: text_forms + word_form_translations (по индексу) ---
+  for (const ctx of contextsOrdered) {
     if (Array.isArray(ctx?.text_forms) && ctx.text_forms.length > 0) {
       const index = ctx.text_forms.findIndex((t: string) => cleanToken(t) === needle);
       if (index >= 0) {
@@ -55,7 +88,7 @@ function lookupFormTranslationFromCard(
   return null;
 }
 
-/* ================== Пропсы компонента ================== */
+/* ================== Пропсы ================== */
 interface ReadingViewProps extends BaseComponentProps {
   inputText: string;
   formTranslations: Map<string, string>;
@@ -87,7 +120,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
     setTooltip({ show: false, text: "", context: "", x: 0, y: 0, isPhrase: false });
   }, []);
 
-  /** Главная функция показа тултипа */
+  /** Показ тултипа по наведению */
   const handleWordHover = React.useCallback(
     (
       card: FlashcardNew,
@@ -106,8 +139,8 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
         let translationText = "";
         let contextInfo = "";
 
-        // ===== ПРИОРИТЕТ 1: точная форма/фраза из contexts (новая/старая схема) =====
-        const fromCard = lookupFormTranslationFromCard(card as any, text);
+        // === 1) contexts[].forms[] / старая схема, с приоритетом на текущее предложение ===
+        const fromCard = lookupFormTranslationFromCard(card as any, text, currentSentence);
         if (fromCard?.translation) {
           translationText = fromCard.translation;
           contextInfo = isPhrase
@@ -115,14 +148,13 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
             : `Form (contexts): ${card.base_form} → ${text}`;
         }
 
-        // ===== ПРИОРИТЕТ 2: если это ФРАЗА — берем base_translation карточки фразы =====
-        // (Это исправляет кейс «iebiezināts piens»: показываем «сгущенное молоко», а не склейку отдельных слов)
+        // === 2) Если это ФРАЗА — берём base_translation карточки фразы, когда форм нет ===
         if (!translationText && isPhrase && card.base_translation) {
           translationText = card.base_translation;
           contextInfo = `Phrase: ${card.base_form}`;
         }
 
-        // ===== ПРИОРИТЕТ 3: историческое поле word_form_translation =====
+        // === 3) Историческое поле word_form_translation (если вдруг есть) ===
         if (!translationText && (card as any).word_form_translation) {
           translationText = (card as any).word_form_translation!;
           contextInfo = isPhrase
@@ -130,20 +162,20 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
             : `Form: ${card.base_form} → ${text}`;
         }
 
-        // ===== ПРИОРИТЕТ 4: Map форм (formTranslations) =====
+        // === 4) Map форм (formTranslations) ===
         if (!translationText && formTranslations && formTranslations.size > 0) {
-          const cleanText = cleanTextForMatching(text);
+          const clean = cleanTextForMatching(text);
 
           if (isPhrase) {
-            // точное совпадение по ключу фразы
-            translationText = formTranslations.get(cleanText) || "";
+            // точный ключ фразы
+            translationText = formTranslations.get(clean) || "";
 
-            // варианты с разделителями
+            // более либеральные варианты
             if (!translationText) {
               const variants = [
-                cleanText.replace(/ /g, "_"),
-                cleanText.replace(/ /g, ""),
-                cleanText.replace(/ /g, "-"),
+                clean.replace(/ /g, "_"),
+                clean.replace(/ /g, ""),
+                clean.replace(/ /g, "-"),
               ];
               for (const v of variants) {
                 const found = formTranslations.get(v);
@@ -154,15 +186,14 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
               }
             }
 
-            // ⚠️ ЕСЛИ фразовый перевод так и не найден — только тогда пробуем «склейку слов»
-            if (!translationText && cleanText.includes(" ")) {
-              const words = cleanText.split(" ").filter(Boolean);
+            // как крайний случай — склейка словарных переводов
+            if (!translationText && clean.includes(" ")) {
+              const words = clean.split(" ").filter(Boolean);
               const translations = words
                 .map(w => formTranslations.get(w))
                 .filter(Boolean) as string[];
-
               if (translations.length > 0) {
-                // Спец-правило под «dzimšanas dienas»
+                // спец-правило под «dzimšanas dienas»
                 if (
                   words.includes("dzimšanas") &&
                   (words.includes("diena") || words.includes("dienas"))
@@ -179,23 +210,22 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
             }
           } else {
             // слово
-            const formTranslation = formTranslations.get(cleanText);
+            const formTranslation = formTranslations.get(clean);
             if (formTranslation) {
               translationText = formTranslation;
               contextInfo = `Form: ${card.base_form} → ${text}`;
             }
 
-            // Проба двухсловной мини-фразы в пределах предложения
+            // небольшой бридж для двусловных мини-фраз в пределах предложения
             if (!translationText && currentSentence) {
               const sentenceWords = currentSentence
                 .split(/\s+/)
                 .map(w => cleanToken(w))
                 .filter(Boolean);
               const w = cleanToken(text);
-              const wordIndex = sentenceWords.findIndex(sw => sw === w);
-
-              if (wordIndex >= 0 && wordIndex < sentenceWords.length - 1) {
-                const phrase = `${w} ${sentenceWords[wordIndex + 1]}`;
+              const idx = sentenceWords.findIndex(sw => sw === w);
+              if (idx >= 0 && idx < sentenceWords.length - 1) {
+                const phrase = `${w} ${sentenceWords[idx + 1]}`;
                 const phraseTranslation = formTranslations.get(phrase);
                 if (phraseTranslation) {
                   translationText = phraseTranslation;
@@ -206,7 +236,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
           }
         }
 
-        // ===== ПРИОРИТЕТ 5: контекстное предложение из карточек =====
+        // === 5) Перевод всего предложения из карточек (с учётом текущего предложения) ===
         if (!translationText && currentSentence) {
           const viaCard = findTranslationForText(text.trim(), flashcards, currentSentence);
           if (viaCard?.contextTranslation) {
@@ -215,7 +245,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
           }
         }
 
-        // ===== ПРИОРИТЕТ 6: card.back → base_translation =====
+        // === 6) Запасные варианты: card.back → base_translation ===
         if (!translationText && (card as any).back) {
           translationText = (card as any).back!;
           contextInfo = `Card back: ${card.base_form}`;
@@ -225,7 +255,7 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
           contextInfo = `Base: ${card.base_form}`;
         }
 
-        // ===== FALLBACK =====
+        // === FALLBACK ===
         if (!translationText) {
           translationText = "Translation not found";
           contextInfo = "No translation available";
@@ -274,7 +304,8 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
     );
   }
 
-  // Разбивка текста на «слова» и «пробелы» (для позиционной логики)
+  // Рендер строго исходного текста (никакой реконструкции)
+  // Разбиваем его на «токены» и пробелы, чтобы подсвечивать слова/фразы.
   const words = inputText.split(/(\s+)/);
   const renderedElements: React.ReactNode[] = [];
   let i = 0;
@@ -282,21 +313,21 @@ export const ReadingView: React.FC<ReadingViewProps> = ({
   while (i < words.length) {
     const token = words[i];
 
-    // Пробелы — выводим как есть
+    // Пробельные токены — выводим как есть
     if (/^\s+$/.test(token)) {
       renderedElements.push(<span key={i}>{token}</span>);
       i++;
       continue;
     }
 
-    // Пунктуация отдельно, без подсказок
+    // Чистая пунктуация — без тултипа
     if (!token.trim() || /^[.,!?;:]+$/.test(token.trim())) {
       renderedElements.push(<span key={i}>{token}</span>);
       i++;
       continue;
     }
 
-    // 1) Пытаемся найти фразу
+    // 1) Попытка найти фразу (по карточкам)
     const phraseMatch = findPhraseAtPosition(words, i, flashcards);
     if (phraseMatch) {
       const phraseParts: string[] = [];
